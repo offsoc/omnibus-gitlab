@@ -1,88 +1,222 @@
-name: Build Omnibus packages
+name: Build GitLab EE Packages
 
 on:
   push:
     branches: [ main, master ]
     tags: [ 'v*' ]
   workflow_dispatch:
+    inputs:
+      debug:
+        description: 'Enable debug mode'
+        required: false
+        default: false
+        type: boolean
+  schedule:
+    - cron: '0 2 * * 1'  # Weekly builds on Mondays at 2 AM UTC
 
 jobs:
   build-packages:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     strategy:
       matrix:
-        os: [debian12, debian13, ubuntu25]
+        include:
+          - os: ubuntu20
+            image: ubuntu:20.04
+          - os: ubuntu22
+            image: ubuntu:22.04
+          - os: debian11
+            image: debian:bullseye
+          - os: debian12
+            image: debian:bookworm
+      fail-fast: false
+      max-parallel: 2
     env:
+      ee: "true"
       COMPRESS_XZ: "true"
       GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
-      ee: "true"
+      BUNDLE_JOBS: "4"
+      BUNDLE_RETRY: "3"
+      BUILD_LOG_LEVEL: ${{ inputs.debug && 'debug' || 'info' }}
+      DEBUG: ${{ inputs.debug && 'true' || 'false' }}
     steps:
-      - name: Checkout repository
+      - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Install OS-specific dependencies
+          persist-credentials: false
+          
+      - name: System diagnostics
         run: |
-          case ${{ matrix.os }} in
-            debian10)
-              # Install Debian 12 specific packages
-              sudo apt-get update
-              sudo apt-get install -y build-essential ruby ruby-dev libssl-dev zlib1g-dev \
-                libffi-dev libreadline-dev libyaml-dev libxml2-dev libxslt1-dev \
-                libpq-dev libsqlite3-dev libmysqlclient-dev libcurl4-openssl-dev \
-                libicu-dev cmake pkg-config xz-utils curl git
-              ;;
-            debian11)
-              # Install Debian 13 specific packages
-              sudo apt-get update
-              sudo apt-get install -y build-essential ruby ruby-dev libssl-dev zlib1g-dev \
-                libffi-dev libreadline-dev libyaml-dev libxml2-dev libxslt1-dev \
-                libpq-dev libsqlite3-dev libmysqlclient-dev libcurl4-openssl-dev \
-                libicu-dev cmake pkg-config xz-utils curl git
-              ;;
-            ubuntu20)
-              # Install Ubuntu 25.04 specific packages
-              sudo apt-get update
-              sudo apt-get install -y build-essential ruby ruby-dev libssl-dev zlib1g-dev \
-                libffi-dev libreadline-dev libyaml-dev libxml2-dev libxslt1-dev \
-                libpq-dev libsqlite3-dev libmysqlclient-dev libcurl4-openssl-dev \
-                libicu-dev cmake pkg-config xz-utils curl git
-              ;;
-          esac
+          echo "=== System Information ==="
+          echo "Runner OS: $(uname -a)"
+          echo "Date: $(date)"
+          echo "Working directory: $(pwd)"
+          echo "User: $(whoami)"
+          echo "\n=== Disk Space ==="
+          df -h
+          echo "\n=== Memory ==="
+          free -h
+          echo "\n=== CPU ==="
+          lscpu | head -10
+          if [[ "${{ env.DEBUG }}" == "true" ]]; then
+            echo "\n=== Environment Variables ==="
+            env | sort
+          fi
+
+      - name: Setup environment
+        run: |
+          # Create cache directories with proper permissions
+          mkdir -p $HOME/.cache/omnibus $HOME/pkg $HOME/.bundle
+          chmod 755 $HOME/.cache/omnibus
+          # Set environment variables
+          echo "OMNIBUS_CACHE_DIR=$HOME/.cache/omnibus" >> $GITHUB_ENV
+          echo "PKG_DIR=$HOME/pkg" >> $GITHUB_ENV
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            ruby ruby-dev \
+            libssl-dev zlib1g-dev \
+            libffi-dev libreadline-dev libyaml-dev \
+            libxml2-dev libxslt1-dev \
+            libpq-dev libsqlite3-dev libmysqlclient-dev \
+            libcurl4-openssl-dev libicu-dev \
+            cmake pkg-config \
+            xz-utils curl git ca-certificates \
+            rpm fakeroot
+          # Clean up
+          sudo apt-get clean
+          rm -rf /var/lib/apt/lists/*
+
+      - name: Setup Ruby environment
+        run: |
+          # Remove conflicting bundler versions
+          sudo gem uninstall bundler --all --executables || true
+          # Install bundler version matching Gemfile.lock
+          BUNDLER_VERSION="$(grep -A 1 "BUNDLED WITH" Gemfile.lock | tail -1 | tr -d '[:space:]')"
+          sudo gem install bundler -v "$BUNDLER_VERSION" --no-document
+          # Verify installation
+          bundle --version
 
       - name: Install Ruby gems
         run: |
-          # Use sudo to install bundler system-wide
-          sudo gem install bundler
-          # Configure bundle to use local path
+          # Configure bundle for optimal performance
           bundle config set --local path 'vendor/bundle'
-          bundle install --jobs 4 --retry 3
+          bundle config set --local bin 'vendor/bundle/bin'
+          bundle config set --local jobs '${{ env.BUNDLE_JOBS }}'
+          bundle config set --local retry '${{ env.BUNDLE_RETRY }}'
+          bundle config set --local without 'development test rubocop'
+          # Install gems
+          bundle install
           bundle binstubs --all
 
-      - name: Build Omnibus package
+      - name: Validate build requirements
         run: |
-          # Build gitlab omnibus package (outputs go to pkg/)
-          bundle exec omnibus build gitlab
+          echo "=== Build Validation ==="
+          # Check required patch file
+          PATCH_FILE="config/patches/gitlab-rails/replace-license-key.patch"
+          if [ ! -f "$PATCH_FILE" ]; then
+            echo "::error::Critical patch file not found: $PATCH_FILE"
+            echo "This patch is required for EE builds"
+            exit 1
+          else
+            echo "✓ Patch file verified: $PATCH_FILE"
+            ls -lh "$PATCH_FILE"
+          fi
+          
+          # Check GitLab edition
+          if [[ "${{ env.ee }}" == "true" ]]; then
+            echo "✓ Building GitLab Enterprise Edition"
+          else
+            echo "::warning::Building Community Edition (ee=false)"
+          fi
+          
+          # Display build environment
+          echo "\n=== Build Environment ==="
+          echo "Target OS: ${{ matrix.os }} (${{ matrix.image }})"
+          echo "Ruby version: $(ruby -v | cut -d' ' -f1-2)"
+          echo "Bundler version: $(bundle --version | cut -d' ' -f1-2)"
+          echo "Build log level: ${{ env.BUILD_LOG_LEVEL }}"
+          echo "Debug mode: ${{ env.DEBUG }}"
+          
+          # Check available disk space
+          AVAILABLE_SPACE=$(df . | awk 'NR==2 {print $4}')
+          if [ "$AVAILABLE_SPACE" -lt 10485760 ]; then  # Less than 10GB
+            echo "::warning::Low disk space available: $(($AVAILABLE_SPACE / 1024 / 1024))MB"
+          fi
+
+      - name: Build GitLab EE packages
+        run: |
+          # Ensure cache directory exists with proper permissions
+          mkdir -p $HOME/.cache/omnibus
+          chmod 755 $HOME/.cache/omnibus
+          # Build with verbose logging
+          bundle exec omnibus build gitlab --log-level ${{ env.BUILD_LOG_LEVEL }}
         env:
+          ee: "true"
           COMPRESS_XZ: "true"
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+          OMNIBUS_CACHE_DIR: $HOME/.cache/omnibus
+          PKG_DIR: $HOME/pkg
 
-      - name: List produced packages
-        run: ls -al pkg || true
+      - name: Package verification and listing
+        run: |
+          echo "=== Build Summary ==="
+          echo "Generated packages in pkg/ directory:"
+          ls -la pkg/ 2>/dev/null || echo "No packages directory found"
+          
+          echo -e "\n=== DEB Packages ==="
+          DEB_COUNT=$(find pkg/ -name "*.deb" -type f 2>/dev/null | wc -l)
+          if [ "$DEB_COUNT" -gt 0 ]; then
+            find pkg/ -name "*.deb" -type f -exec ls -lh {} \;
+            echo "Total DEB packages: $DEB_COUNT"
+          else
+            echo "No DEB packages generated"
+          fi
+          
+          echo -e "\n=== RPM Packages ==="
+          RPM_COUNT=$(find pkg/ -name "*.rpm" -type f 2>/dev/null | wc -l)
+          if [ "$RPM_COUNT" -gt 0 ]; then
+            find pkg/ -name "*.rpm" -type f -exec ls -lh {} \;
+            echo "Total RPM packages: $RPM_COUNT"
+          else
+            echo "No RPM packages generated"
+          fi
+          
+          TOTAL_PACKAGES=$((DEB_COUNT + RPM_COUNT))
+          echo -e "\n=== Final Summary ==="
+          echo "OS: ${{ matrix.os }}"
+          echo "Total packages generated: $TOTAL_PACKAGES"
+          if [ "$TOTAL_PACKAGES" -eq 0 ]; then
+            echo "::warning::No packages were generated"
+          fi
 
-      - name: Upload Debian packages
+      - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         if: always()
+        continue-on-error: true
         with:
-          name: deb-packages-${{ matrix.os }}
+          name: gitlab-ee-${{ matrix.os }}-${{ github.sha }}
           path: |
-            pkg/**/*.deb
+            pkg/**
+            build_facts/**
+            omnibus.log
+            build.log
+          retention-days: ${{ inputs.debug && 7 || 30 }}
+          compression-level: 6
+          if-no-files-found: warn
 
-      - name: Upload RPM packages
-        uses: actions/upload-artifact@v4
+      - name: Cleanup workspace
         if: always()
-        with:
-          name: rpm-packages-${{ matrix.os }}
-          path: |
-            pkg/**/*.rpm
+        run: |
+          echo "=== Cleanup ==="
+          # Remove large temporary files to save space
+          rm -rf vendor/bundle/ruby/*/cache
+          rm -rf $HOME/.cache/omnibus/*
+          rm -rf tmp/
+          # Show final disk usage
+          echo "Final disk usage:"
+          du -sh .
+          df -h .

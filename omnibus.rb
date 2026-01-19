@@ -1,3 +1,6 @@
+# Cache directory configuration
+cache_dir ENV['OMNIBUS_CACHE_DIR'] || File.join(Dir.home, '.cache', 'omnibus')
+
 use_s3_caching !ENV['USE_S3_CACHE'].nil? && !ENV['USE_S3_CACHE'].casecmp("false").zero?
 s3_access_key ENV['CACHE_AWS_ACCESS_KEY_ID']
 s3_secret_key ENV['CACHE_AWS_SECRET_ACCESS_KEY']
