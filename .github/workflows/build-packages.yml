@@ -96,13 +96,77 @@ jobs:
 
       - name: Setup Ruby environment
         run: |
-          # Remove conflicting bundler versions
-          sudo gem uninstall bundler --all --executables || true
-          # Install bundler version matching Gemfile.lock
-          BUNDLER_VERSION="$(grep -A 1 "BUNDLED WITH" Gemfile.lock | tail -1 | tr -d '[:space:]')"
-          sudo gem install bundler -v "$BUNDLER_VERSION" --no-document
+          echo "=== Ruby Environment Setup ==="
+          echo "System Ruby version: $(ruby -v)"
+          echo "System Bundler gems: $(gem list bundler --local)"
+          
+          # Check if we have a compatible Ruby version available
+          echo "Checking available Ruby versions:"
+          if command -v ruby3.2 >/dev/null 2>&1; then
+            echo "✓ Ruby 3.2 is available"
+            # Switch to Ruby 3.2 for better compatibility
+            sudo update-alternatives --set ruby /usr/bin/ruby3.2
+            sudo update-alternatives --set gem /usr/bin/gem3.2
+            echo "Switched to Ruby: $(ruby -v)"
+          elif command -v ruby3.1 >/dev/null 2>&1; then
+            echo "✓ Ruby 3.1 is available"
+            sudo update-alternatives --set ruby /usr/bin/ruby3.1
+            sudo update-alternatives --set gem /usr/bin/gem3.1
+            echo "Switched to Ruby: $(ruby -v)"
+          else
+            echo "⚠ No newer Ruby versions available, using system Ruby 3.0"
+          fi
+          
+          # Get required bundler version from Gemfile.lock
+          REQUIRED_BUNDLER="$(grep -A 1 "BUNDLED WITH" Gemfile.lock | tail -1 | tr -d '[:space:]')"
+          echo "Required Bundler version from Gemfile.lock: $REQUIRED_BUNDLER"
+          
+          # Get current Ruby version after potential switch
+          CURRENT_RUBY=$(ruby -v | cut -d' ' -f2 | cut -d'p' -f1)
+          CURRENT_MAJOR_MINOR=$(echo "$CURRENT_RUBY" | cut -d'.' -f1,2)
+          echo "Current Ruby version: $CURRENT_RUBY (major.minor: $CURRENT_MAJOR_MINOR)"
+          
+          # Install bundler with appropriate version compatibility
+          echo "Installing bundler..."
+          
+          # Try the exact version first
+          if sudo gem install bundler -v "$REQUIRED_BUNDLER" --no-document --force 2>/dev/null; then
+            echo "✓ Successfully installed bundler $REQUIRED_BUNDLER"
+          else
+            echo "⚠ Could not install exact version $REQUIRED_BUNDLER, installing compatible version..."
+            
+            case "$CURRENT_MAJOR_MINOR" in
+              "3.0")
+                echo "Installing bundler compatible with Ruby 3.0"
+                sudo gem install bundler -v "~> 2.2.0" --no-document --force
+                ;;
+              "3.1")
+                echo "Installing bundler compatible with Ruby 3.1"
+                sudo gem install bundler -v "~> 2.3.0" --no-document --force
+                ;;
+              *)
+                echo "Installing latest compatible bundler for Ruby $CURRENT_MAJOR_MINOR"
+                sudo gem install bundler --no-document --force
+                ;;
+            esac
+          fi
+          
           # Verify installation
-          bundle --version
+          if command -v bundle >/dev/null 2>&1; then
+            INSTALLED_BUNDLER=$(bundle --version 2>/dev/null | head -1)
+            echo "✓ Bundler successfully installed: $INSTALLED_BUNDLER"
+          else
+            echo "❌ Bundler installation failed"
+            echo "Available Ruby: $(ruby -v)"
+            echo "Available bundler gems:"
+            gem list bundler --local
+            exit 1
+          fi
+          
+          echo "Final environment:"
+          echo "Ruby: $(ruby -v)"
+          echo "Bundler: $(bundle --version 2>/dev/null | head -1)"
+          echo "Bundler gems: $(gem list bundler --local)"
 
       - name: Install Ruby gems
         run: |
