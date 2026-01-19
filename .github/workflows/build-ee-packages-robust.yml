@@ -1,4 +1,4 @@
-name: Build Omnibus packages (Simple)
+name: Build GitLab EE Packages (Robust)
 
 on:
   push:
@@ -7,8 +7,12 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-package:
+  build-ee-package:
     runs-on: ubuntu-latest
+    env:
+      ee: "true"
+      COMPRESS_XZ: "true"
+      GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -40,12 +44,22 @@ jobs:
             git \
             ca-certificates
 
-      - name: Install bundler and gems
+      - name: Setup Ruby environment
         run: |
-          # Use sudo to install bundler system-wide
-          sudo gem install bundler
-          # Configure bundle to use local path
+          # Remove any existing bundler to avoid conflicts
+          sudo gem uninstall bundler --all --executables || true
+          # Install specific bundler version from Gemfile.lock
+          sudo gem install bundler -v "$(grep -A 1 "BUNDLED WITH" Gemfile.lock | tail -1 | tr -d '[:space:]')" || sudo gem install bundler
+          # Configure gem environment
+          gem env
+
+      - name: Install gems with proper configuration
+        run: |
+          # Configure bundle to use vendor directory and avoid system conflicts
           bundle config set --local path 'vendor/bundle'
+          bundle config set --local bin 'vendor/bundle/bin'
+          bundle config set --local without 'development test'
+          # Install gems
           bundle install --jobs 4 --retry 3
           bundle binstubs --all
 
@@ -57,22 +71,22 @@ jobs:
             echo "WARNING: patch file not found"; exit 1
           fi
 
-      - name: Build Omnibus package
+      - name: Build GitLab EE Omnibus package
         run: |
-          # Build gitlab EE omnibus package (outputs go to pkg/)
+          # Build GitLab EE omnibus package (outputs go to pkg/)
           bundle exec omnibus build gitlab
         env:
+          ee: "true"
           COMPRESS_XZ: "true"
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
-          ee: "true"
 
-      - name: List produced packages
+      - name: List produced EE packages
         run: ls -al pkg || true
 
-      - name: Upload artifacts
+      - name: Upload EE artifacts
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: omnibus-packages
+          name: gitlab-ee-packages-robust
           path: |
             pkg/**

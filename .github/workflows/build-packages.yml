@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        os: [debian10, debian11, ubuntu20]
+        os: [debian12, debian13, ubuntu25]
     env:
       COMPRESS_XZ: "true"
       GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
@@ -53,7 +53,10 @@ jobs:
 
       - name: Install Ruby gems
         run: |
-          gem install bundler
+          # Use sudo to install bundler system-wide
+          sudo gem install bundler
+          # Configure bundle to use local path
+          bundle config set --local path 'vendor/bundle'
           bundle install --jobs 4 --retry 3
           bundle binstubs --all
 

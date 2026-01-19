@@ -46,7 +46,10 @@ jobs:
 
       - name: Install bundler and gems
         run: |
-          gem install bundler
+          # Use sudo to install bundler system-wide
+          sudo gem install bundler
+          # Configure bundle to use local path
+          bundle config set --local path 'vendor/bundle'
           bundle install --jobs 4 --retry 3
           bundle binstubs --all
 
