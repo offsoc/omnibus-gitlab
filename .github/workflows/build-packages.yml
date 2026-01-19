@@ -1,0 +1,76 @@
+name: Build Omnibus packages
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  workflow_dispatch:
+
+jobs:
+  build-packages:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - image: registry.gitlab.com/gitlab-org/gitlab-omnibus-builder/debian_10:latest
+            id: debian_10
+          - image: registry.gitlab.com/gitlab-org/gitlab-omnibus-builder/debian_11:latest
+            id: debian_11
+          - image: registry.gitlab.com/gitlab-org/gitlab-omnibus-builder/ubuntu_20:latest
+            id: ubuntu_20
+    container:
+      image: ${{ matrix.image }}
+      options: --user root
+    env:
+      COMPRESS_XZ: "true"
+      GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Show selected builder
+        run: |
+          echo "Using builder image: ${{ matrix.image }}"
+
+      - name: Quick patch presence check
+        run: |
+          if [ -f config/patches/gitlab-rails/replace-license-key.patch ]; then
+            echo "Patch file present: config/patches/gitlab-rails/replace-license-key.patch"
+          else
+            echo "WARNING: patch file not found"; exit 1
+          fi
+
+      - name: Install build prerequisites
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends build-essential git xz-utils ca-certificates curl
+
+      - name: Install bundler
+        run: gem install bundler
+
+      - name: Install Ruby gems
+        run: bundle install --jobs 4 --retry 3
+
+      - name: Build Omnibus package
+        run: |
+          # Build gitlab omnibus package (outputs go to pkg/)
+          bundle exec omnibus build gitlab
+
+      - name: List produced packages
+        run: ls -al pkg || true
+
+      - name: Upload Debian packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: deb-packages-${{ matrix.id }}
+          path: |
+            pkg/**/*.deb
+
+      - name: Upload RPM packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpm-packages-${{ matrix.id }}
+          path: |
+            pkg/**/*.rpm
