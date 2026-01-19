@@ -1,0 +1,38 @@
+FROM debian:bookworm-20260112-slim
+
+# Install build essentials and omnibus dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    curl \
+    git \
+    ruby ruby-dev \
+    libssl-dev \
+    zlib1g-dev \
+    libffi-dev \
+    libreadline-dev \
+    libyaml-dev \
+    libxml2-dev \
+    libxslt1-dev \
+    libpq-dev \
+    libsqlite3-dev \
+    libmysqlclient-dev \
+    libcurl4-openssl-dev \
+    libicu-dev \
+    cmake \
+    pkg-config \
+    xz-utils \
+    ca-certificates \
+    gnupg \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install bundler
+RUN gem install bundler
+
+# Set working directory
+WORKDIR /omnibus-gitlab
+
+# Create non-root user
+RUN useradd -m -s /bin/bash omnibus
+USER omnibus
+
+CMD ["/bin/bash"]
