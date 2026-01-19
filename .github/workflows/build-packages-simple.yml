@@ -1,0 +1,75 @@
+name: Build Omnibus packages (Simple)
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  workflow_dispatch:
+
+jobs:
+  build-package:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            ruby ruby-dev \
+            libssl-dev \
+            zlib1g-dev \
+            libffi-dev \
+            libreadline-dev \
+            libyaml-dev \
+            libxml2-dev \
+            libxslt1-dev \
+            libpq-dev \
+            libsqlite3-dev \
+            libmysqlclient-dev \
+            libcurl4-openssl-dev \
+            libicu-dev \
+            cmake \
+            pkg-config \
+            xz-utils \
+            curl \
+            git \
+            ca-certificates
+
+      - name: Install bundler and gems
+        run: |
+          gem install bundler
+          bundle install --jobs 4 --retry 3
+          bundle binstubs --all
+
+      - name: Quick patch presence check
+        run: |
+          if [ -f config/patches/gitlab-rails/replace-license-key.patch ]; then
+            echo "Patch file present: config/patches/gitlab-rails/replace-license-key.patch"
+          else
+            echo "WARNING: patch file not found"; exit 1
+          fi
+
+      - name: Build Omnibus package
+        run: |
+          # Build gitlab EE omnibus package (outputs go to pkg/)
+          bundle exec omnibus build gitlab
+        env:
+          COMPRESS_XZ: "true"
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+          ee: "true"
+
+      - name: List produced packages
+        run: ls -al pkg || true
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: omnibus-packages
+          path: |
+            pkg/**
