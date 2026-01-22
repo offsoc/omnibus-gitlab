@@ -412,15 +412,26 @@ jobs:
           fi
           
           # Ensure cache directory exists with proper permissions
+          # Create user-owned cache directory and configure Omnibus to use it
           mkdir -p $HOME/.cache/omnibus
           chmod 755 $HOME/.cache/omnibus
+          
+          # Set OMNIBUS_CACHE_DIR to user directory to avoid permission issues
+          export OMNIBUS_CACHE_DIR="$HOME/.cache/omnibus"
+          
+          # Also ensure other required directories exist with proper permissions
+          mkdir -p $HOME/pkg
+          chmod 755 $HOME/pkg
+          
+          echo "Using cache directory: $OMNIBUS_CACHE_DIR"
+          echo "Package output directory: $HOME/pkg"
+          
           # Build with verbose logging
           bundle exec omnibus build gitlab --log-level ${{ env.BUILD_LOG_LEVEL }}
         env:
           ee: "true"
           COMPRESS_XZ: "true"
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
-          OMNIBUS_CACHE_DIR: $HOME/.cache/omnibus
           PKG_DIR: $HOME/pkg
           NIGHTLY: ""
 
