@@ -75,13 +75,19 @@ jobs:
           # Set environment variables
           echo "OMNIBUS_CACHE_DIR=$HOME/.cache/omnibus" >> $GITHUB_ENV
           echo "PKG_DIR=$HOME/pkg" >> $GITHUB_ENV
+          echo "PATH=$HOME/.gem/ruby/$(ruby -v | cut -d' ' -f2 | cut -d'.' -f1,2).0/bin:$PATH" >> $GITHUB_ENV
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: 3.2.8
+          bundler-cache: true  # 自动缓存 bundle
 
       - name: Install system dependencies
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
             build-essential \
-            ruby ruby-dev \
             libssl-dev zlib1g-dev \
             libffi-dev libreadline-dev libyaml-dev \
             libxml2-dev libxslt1-dev \
@@ -94,183 +100,17 @@ jobs:
           sudo apt-get clean
           sudo rm -rf /var/lib/apt/lists/* 2>/dev/null || true
 
-      - name: Setup Ruby environment
-        run: |
-          echo "=== Ruby Environment Setup ==="
-          echo "System Ruby version: $(ruby -v)"
-          echo "System Bundler gems: $(gem list bundler --local)"
-          
-          # Check if we have a compatible Ruby version available
-          echo "Checking available Ruby versions:"
-          if command -v ruby3.2 >/dev/null 2>&1; then
-            echo "✓ Ruby 3.2 is available"
-            # Switch to Ruby 3.2 for better compatibility
-            sudo update-alternatives --set ruby /usr/bin/ruby3.2
-            sudo update-alternatives --set gem /usr/bin/gem3.2
-            echo "Switched to Ruby: $(ruby -v)"
-          elif command -v ruby3.1 >/dev/null 2>&1; then
-            echo "✓ Ruby 3.1 is available"
-            sudo update-alternatives --set ruby /usr/bin/ruby3.1
-            sudo update-alternatives --set gem /usr/bin/gem3.1
-            echo "Switched to Ruby: $(ruby -v)"
-          else
-            echo "⚠ No newer Ruby versions available via update-alternatives, attempting to install Ruby 3.2.8 with rbenv..."
-            
-            # Install rbenv if not present
-            if [ ! -d "$HOME/.rbenv" ]; then
-              echo "Installing rbenv..."
-              git clone https://github.com/rbenv/rbenv.git $HOME/.rbenv
-              
-              # Install ruby-build plugin
-              git clone https://github.com/rbenv/ruby-build.git $HOME/.rbenv/plugins/ruby-build
-              
-              # Add rbenv to PATH
-              export PATH="$HOME/.rbenv/bin:$PATH"
-            else
-              export PATH="$HOME/.rbenv/bin:$PATH"
-            fi
-            
-            # Reinitialize rbenv
-            eval "$(rbenv init -)"
-            
-            # Install Ruby 3.2.8 if not already installed
-            if ! rbenv versions --bare | grep -q "^3\.2\.8$"; then
-              echo "Installing Ruby 3.2.8..."
-              rbenv install 3.2.8
-            fi
-            
-            # Set Ruby 3.2.8 as the global version
-            rbenv global 3.2.8
-            eval "$(rbenv init -)"
-            
-            echo "Set Ruby version to: $(ruby -v)"
-          fi
-          
-          # Get current Ruby version after potential switch
-          CURRENT_RUBY=$(ruby -v | cut -d' ' -f2 | cut -d'p' -f1)
-          CURRENT_MAJOR_MINOR=$(echo "$CURRENT_RUBY" | cut -d'.' -f1,2)
-          echo "Current Ruby version: $CURRENT_RUBY (major.minor: $CURRENT_MAJOR_MINOR)"
-          
-          # Determine compatible bundler version based on Ruby version
-          # Use newer bundler versions that support force_ruby_platform: true from Gemfile
-          case "$CURRENT_MAJOR_MINOR" in
-            "3.0")
-              # Ruby 3.0 needs a newer bundler that supports force_ruby_platform
-              BUNDLER_VERSION="2.4.22"  # Supports force_ruby_platform and is compatible with Ruby 3.0
-              echo "Using bundler version $BUNDLER_VERSION for Ruby 3.0 compatibility with force_ruby_platform support"
-              ;;
-            "3.1")
-              BUNDLER_VERSION="2.4.22"  # Safe version that supports force_ruby_platform
-              echo "Using bundler version $BUNDLER_VERSION for Ruby 3.1 compatibility with force_ruby_platform support"
-              ;;
-            "3.2")
-              BUNDLER_VERSION="2.7.1"   # Latest version for Ruby 3.2+
-              echo "Using bundler version $BUNDLER_VERSION for Ruby 3.2+ compatibility"
-              ;;
-            *)
-              BUNDLER_VERSION="2.7.1"  # Latest version that supports force_ruby_platform
-              echo "Using fallback bundler version $BUNDLER_VERSION with force_ruby_platform support"
-              ;;
-          esac
-          
-          export BUNDLER_VERSION
-          echo "Final BUNDLER_VERSION: $BUNDLER_VERSION"
-          
-          # Create user gem directory if it doesn't exist
-          mkdir -p $HOME/.gem/ruby
-          
-          # Install bundler to user directory using the approach from GitLab CI prepare_bundle.sh
-          echo "Installing bundler version $BUNDLER_VERSION to user directory..."
-          gem install bundler:$BUNDLER_VERSION --user-install --no-document --force
-          
-          # Find the correct user gem bin directory - prioritize the main bin directory
-          USER_GEM_BIN=""
-          
-          # First try to find the main user bin directory (not template directories)
-          RUBY_VERSION=$(ruby -v | cut -d' ' -f2 | cut -d'.' -f1,2)
-          MAIN_USER_BIN="$HOME/.gem/ruby/$RUBY_VERSION.0/bin"
-          
-          if [ -d "$MAIN_USER_BIN" ] && [ -f "$MAIN_USER_BIN/bundle" ]; then
-            USER_GEM_BIN="$MAIN_USER_BIN"
-            echo "Found main user gem bin directory: $USER_GEM_BIN"
-          else
-            # Fallback: search for bin directories but exclude template directories
-            USER_GEM_BIN=$(find $HOME/.gem -path "*/bin" -type d -not -path "*/templates/*" -not -path "*/template/*" 2>/dev/null | head -1)
-            if [ -n "$USER_GEM_BIN" ] && [ -f "$USER_GEM_BIN/bundle" ]; then
-              echo "Found user gem bin directory (fallback search): $USER_GEM_BIN"
-            else
-              # Last resort: use the main bin directory even if it doesn't exist yet
-              USER_GEM_BIN="$MAIN_USER_BIN"
-              echo "Using default user gem bin directory: $USER_GEM_BIN"
-              mkdir -p "$USER_GEM_BIN"
-            fi
-          fi
-          
-          # Add to PATH
-          export PATH="$USER_GEM_BIN:$PATH"
-          echo "$USER_GEM_BIN" >> $GITHUB_PATH
-          
-          # Verify installation in the same session
-          if command -v bundle >/dev/null 2>&1; then
-            INSTALLED_BUNDLER=$(bundle --version 2>/dev/null | head -1)
-            echo "✓ Bundler successfully installed: $INSTALLED_BUNDLER"
-            gem list bundler --local
-          else
-            echo "❌ Bundler installation failed - bundle command not found"
-            echo "PATH: $PATH"
-            echo "Looking for bundle in:"
-            echo "Main user bin: $MAIN_USER_BIN"
-            echo "Selected user bin: $USER_GEM_BIN"
-            ls -la "$MAIN_USER_BIN" 2>/dev/null || echo "Main user bin directory not found or empty"
-            find $HOME/.gem -name "bundle" -type f 2>/dev/null || echo "Bundle executable not found"
-            echo "Available Ruby: $(ruby -v)"
-            echo "Available bundler gems:"
-            gem list bundler --local
-            exit 1
-          fi
-          
-          echo "Final environment:"
-          echo "Ruby: $(ruby -v)"
-          echo "Bundler: $(bundle --version 2>/dev/null | head -1)"
-          echo "Bundler gems: $(gem list bundler --local)"
-          echo "Bundle executable path: $(which bundle)"
-          echo "Current PATH: $PATH"
-
       - name: Install Ruby gems
         run: |
           echo "=== Installing Ruby Gems ==="
           
-          # Recalculate BUNDLER_VERSION for consistency (same logic as setup step)
-          CURRENT_RUBY=$(ruby -v | cut -d' ' -f2 | cut -d'p' -f1)
-          CURRENT_MAJOR_MINOR=$(echo "$CURRENT_RUBY" | cut -d'.' -f1,2)
-          case "$CURRENT_MAJOR_MINOR" in
-            "3.0") BUNDLER_VERSION="2.4.22" ;;
-            "3.1") BUNDLER_VERSION="2.4.22" ;;
-            "3.2") BUNDLER_VERSION="2.7.1" ;;
-            *) BUNDLER_VERSION="2.4.22" ;;
-          esac
-          export BUNDLER_VERSION
-          echo "Using BUNDLER_VERSION: $BUNDLER_VERSION"
-          
           # Export BUNDLER_VERSION for prepare_bundle.sh
-          echo "BUNDLER_VERSION=$BUNDLER_VERSION" >> $GITHUB_ENV
-          
-          # Use the same improved PATH logic as setup step
-          RUBY_VERSION=$(ruby -v | cut -d' ' -f2 | cut -d'.' -f1,2)
-          MAIN_USER_BIN="$HOME/.gem/ruby/$RUBY_VERSION.0/bin"
-          USER_GEM_BIN="$MAIN_USER_BIN"
-          
-          # Ensure the directory exists and add to PATH
-          mkdir -p "$USER_GEM_BIN"
-          export PATH="$USER_GEM_BIN:$PATH"
+          echo "BUNDLER_VERSION=2.7.1" >> $GITHUB_ENV
           
           # Verify bundle is available
           if ! command -v bundle >/dev/null 2>&1; then
             echo "❌ Bundle command not found in PATH"
             echo "PATH: $PATH"
-            echo "Looking in: $USER_GEM_BIN"
-            ls -la "$USER_GEM_BIN" 2>/dev/null || echo "Bin directory not found or empty"
-            find $HOME/.gem -name "bundle" -type f 2>/dev/null || echo "Bundle executable not found"
             exit 1
           fi
           
@@ -287,27 +127,6 @@ jobs:
       - name: Validate build requirements
         run: |
           echo "=== Build Validation ==="
-          
-          # Recalculate BUNDLER_VERSION for consistency
-          CURRENT_RUBY=$(ruby -v | cut -d' ' -f2 | cut -d'p' -f1)
-          CURRENT_MAJOR_MINOR=$(echo "$CURRENT_RUBY" | cut -d'.' -f1,2)
-          case "$CURRENT_MAJOR_MINOR" in
-            "3.0") BUNDLER_VERSION="2.4.22" ;;
-            "3.1") BUNDLER_VERSION="2.4.22" ;;
-            "3.2") BUNDLER_VERSION="2.7.1" ;;
-            *) BUNDLER_VERSION="2.4.22" ;;
-          esac
-          export BUNDLER_VERSION
-          echo "Using BUNDLER_VERSION: $BUNDLER_VERSION"
-          
-          # Use the same improved PATH logic as setup step
-          RUBY_VERSION=$(ruby -v | cut -d' ' -f2 | cut -d'.' -f1,2)
-          MAIN_USER_BIN="$HOME/.gem/ruby/$RUBY_VERSION.0/bin"
-          USER_GEM_BIN="$MAIN_USER_BIN"
-          
-          # Ensure the directory exists and add to PATH
-          mkdir -p "$USER_GEM_BIN"
-          export PATH="$USER_GEM_BIN:$PATH"
           
           # Debug bundler environment
           echo "Bundler environment check:"
@@ -361,34 +180,10 @@ jobs:
           # Echo pipeline type like in GitLab CI
           echo "PIPELINE_TYPE detected as BRANCH_BUILD_PIPELINE"
           
-          # Recalculate BUNDLER_VERSION for consistency (same logic as setup step)
-          CURRENT_RUBY=$(ruby -v | cut -d' ' -f2 | cut -d'p' -f1)
-          CURRENT_MAJOR_MINOR=$(echo "$CURRENT_RUBY" | cut -d'.' -f1,2)
-          case "$CURRENT_MAJOR_MINOR" in
-            "3.0") BUNDLER_VERSION="2.4.22" ;;
-            "3.1") BUNDLER_VERSION="2.4.22" ;;
-            "3.2") BUNDLER_VERSION="2.7.1" ;;
-            *) BUNDLER_VERSION="2.4.22" ;;
-          esac
-          export BUNDLER_VERSION
-          echo "Using BUNDLER_VERSION: $BUNDLER_VERSION"
-          
-          # Use the same improved PATH logic as setup step
-          RUBY_VERSION=$(ruby -v | cut -d' ' -f2 | cut -d'.' -f1,2)
-          MAIN_USER_BIN="$HOME/.gem/ruby/$RUBY_VERSION.0/bin"
-          USER_GEM_BIN="$MAIN_USER_BIN"
-          
-          # Ensure the directory exists and add to PATH
-          mkdir -p "$USER_GEM_BIN"
-          export PATH="$USER_GEM_BIN:$PATH"
-          
           # Verify bundle is available
           if ! command -v bundle >/dev/null 2>&1; then
             echo "❌ Bundle command not found in PATH"
             echo "PATH: $PATH"
-            echo "Looking in: $USER_GEM_BIN"
-            ls -la "$USER_GEM_BIN" 2>/dev/null || echo "Bin directory not found or empty"
-            find $HOME/.gem -name "bundle" -type f 2>/dev/null || echo "Bundle executable not found"
             exit 1
           fi
           
@@ -436,8 +231,7 @@ jobs:
           cat "$TEMP_OMNIBUS_CONFIG"
           
           # Build with verbose logging and explicit config file
-          bundle exec omnibus build gitlab \
-            --config-file "$TEMP_OMNIBUS_CONFIG" \
+          bundle exec omnibus --config-file "$TEMP_OMNIBUS_CONFIG" build gitlab \
             --log-level "${{ env.BUILD_LOG_LEVEL }}"
         env:
           ee: "true"
