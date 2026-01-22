@@ -44,195 +44,88 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-          
+
       - name: System diagnostics
         run: |
-          echo "=== System Information ==="
-          echo "Runner OS: $(uname -a)"
-          echo "Date: $(date)"
-          echo "Working directory: $(pwd)"
-          echo "User: $(whoami)"
-          echo "\n=== Disk Space ==="
+          echo "=== System Info ==="
+          uname -a
+          date
           df -h
-          echo "\n=== Memory ==="
           free -h
-          echo "\n=== CPU ==="
-          lscpu | head -10
-          
-          # Suppress apt cleanup errors that occur during runner shutdown
-          echo "Note: Some permission errors during runner cleanup are normal and harmless"
-          
-          if [[ "${{ env.DEBUG }}" == "true" ]]; then
-            echo "\n=== Environment Variables ==="
-            env | sort
-          fi
+          lscpu | head -n 10
+          if [[ "${{ env.DEBUG }}" == "true" ]]; then env | sort; fi
 
       - name: Setup environment
         run: |
-          # Create cache directories with proper permissions
           mkdir -p $HOME/.cache/omnibus $HOME/pkg $HOME/.bundle
-          chmod 755 $HOME/.cache/omnibus
-          # Set environment variables
+          chmod 755 $HOME/.cache/omnibus $HOME/pkg
           echo "OMNIBUS_CACHE_DIR=$HOME/.cache/omnibus" >> $GITHUB_ENV
           echo "PKG_DIR=$HOME/pkg" >> $GITHUB_ENV
-          echo "PATH=$HOME/.gem/ruby/$(ruby -v | cut -d' ' -f2 | cut -d'.' -f1,2).0/bin:$PATH" >> $GITHUB_ENV
 
       - name: Set up Ruby
         uses: ruby/setup-ruby@v1
         with:
           ruby-version: 3.2.8
-          bundler-cache: true  # 自动缓存 bundle
+          bundler-cache: true
 
       - name: Install system dependencies
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            build-essential \
-            libssl-dev zlib1g-dev \
-            libffi-dev libreadline-dev libyaml-dev \
-            libxml2-dev libxslt1-dev \
+            build-essential libssl-dev zlib1g-dev libffi-dev \
+            libreadline-dev libyaml-dev libxml2-dev libxslt1-dev \
             libpq-dev libsqlite3-dev libmysqlclient-dev \
-            libcurl4-openssl-dev libicu-dev \
-            cmake pkg-config \
-            xz-utils curl git ca-certificates \
-            rpm fakeroot
-          # Clean up apt cache (requires sudo)
+            libcurl4-openssl-dev libicu-dev cmake pkg-config \
+            xz-utils curl git ca-certificates rpm fakeroot
           sudo apt-get clean
           sudo rm -rf /var/lib/apt/lists/* 2>/dev/null || true
 
       - name: Install Ruby gems
         run: |
           echo "=== Installing Ruby Gems ==="
-          
-          # Export BUNDLER_VERSION for prepare_bundle.sh
           echo "BUNDLER_VERSION=2.7.1" >> $GITHUB_ENV
-          
-          # Verify bundle is available
-          if ! command -v bundle >/dev/null 2>&1; then
-            echo "❌ Bundle command not found in PATH"
-            echo "PATH: $PATH"
-            exit 1
-          fi
-          
-          # Let prepare_bundle.sh handle bundle configuration and installation
-          # This ensures Git dependencies are properly checked out before bundle install
-          echo "Installing gems with bundler via prepare_bundle.sh..."
           bash scripts/ci/prepare_bundle.sh
-          
-          # Create binstubs
-          bundle binstubs --all
-          
-          echo "✓ Gem installation completed successfully"
+          bundle binstubs --all --force
 
       - name: Validate build requirements
         run: |
-          echo "=== Build Validation ==="
-          
-          # Debug bundler environment
-          echo "Bundler environment check:"
-          echo "Bundle version: $(bundle --version 2>/dev/null || echo 'NOT FOUND')"
-          echo "Bundle executable: $(which bundle 2>/dev/null || echo 'NOT FOUND')"
-          echo "Gem environment:"
-          gem env 2>/dev/null || echo "Gem environment not available"
-          echo "Current PATH: $PATH"
-          echo ""
-          
-          # Check required patch file
           PATCH_FILE="config/patches/gitlab-rails/replace-license-key.patch"
           if [ ! -f "$PATCH_FILE" ]; then
             echo "::error::Critical patch file not found: $PATCH_FILE"
-            echo "This patch is required for EE builds"
             exit 1
-          else
-            echo "✓ Patch file verified: $PATCH_FILE"
-            ls -lh "$PATCH_FILE"
           fi
-          
-          # Check GitLab edition
-          if [[ "${{ env.ee }}" == "true" ]]; then
-            echo "✓ Building GitLab Enterprise Edition"
-          else
-            echo "::warning::Building Community Edition (ee=false)"
-          fi
-          
-          # Display build environment
-          echo "\n=== Build Environment ==="
-          echo "Target OS: ${{ matrix.os }} (${{ matrix.image }})"
-          echo "Ruby version: $(ruby -v | cut -d' ' -f1-2)"
-          echo "Bundler version: $(bundle --version | cut -d' ' -f1-2)"
-          echo "Build log level: ${{ env.BUILD_LOG_LEVEL }}"
-          echo "Debug mode: ${{ env.DEBUG }}"
-          
-          # Check available disk space
-          AVAILABLE_SPACE=$(df . | awk 'NR==2 {print $4}')
-          if [ "$AVAILABLE_SPACE" -lt 10485760 ]; then  # Less than 10GB
-            echo "::warning::Low disk space available: $(($AVAILABLE_SPACE / 1024 / 1024))MB"
-          fi
-          
-          # Debug Omnibus installation
-          echo "\n=== Omnibus Debug Info ==="
-          echo "Omnibus version: $(bundle exec omnibus --version 2>/dev/null || echo 'NOT FOUND')"
-          echo "Omnibus executable: $(which omnibus 2>/dev/null || echo 'NOT FOUND')"
-          echo "Omnibus gem location: $(bundle show omnibus 2>/dev/null || echo 'NOT FOUND')"
+          echo "✓ Patch file verified: $PATCH_FILE"
 
       - name: Build GitLab EE packages
         run: |
-          # Echo pipeline type like in GitLab CI
-          echo "PIPELINE_TYPE detected as BRANCH_BUILD_PIPELINE"
-          
-          # Verify bundle is available
-          if ! command -v bundle >/dev/null 2>&1; then
-            echo "❌ Bundle command not found in PATH"
-            echo "PATH: $PATH"
-            exit 1
-          fi
-          
-          # Run the same before_script commands as in GitLab CI
-          echo $NIGHTLY
-          mkdir -p ~/.ssh
-          mkdir -p ~/.aws
-          mkdir -p cache
+          echo "=== Prepare directories and cache ==="
+          mkdir -p $HOME/.cache/omnibus $HOME/pkg ~/.ssh ~/.aws cache
+          chmod 755 $HOME/.cache/omnibus $HOME/pkg
+
           if [ -n "$DEV_GITLAB_SSH_KEY" ]; then
-            echo "$DEV_GITLAB_SSH_KEY" > ~/.ssh/id_rsa;
-            cp support/known_hosts ~/.ssh/known_hosts;
-            chmod -R 0600 ~/.ssh/;
+            echo "$DEV_GITLAB_SSH_KEY" > ~/.ssh/id_rsa
+            cp support/known_hosts ~/.ssh/known_hosts
+            chmod 600 ~/.ssh/id_rsa ~/.ssh/known_hosts
           fi
-          bash scripts/ci/prepare_bundle.sh
-          if [ -n "$NIGHTLY" ]; then
-            export STAGING_REPO=${NIGHTLY_REPO};
-            export FIPS_STAGING_REPO=${NIGHTLY_FIPS_REPO};
-          fi
-          
-          # Ensure cache directory exists with proper permissions
-          # Create user-owned cache directory
-          mkdir -p $HOME/.cache/omnibus
-          chmod 755 $HOME/.cache/omnibus
-          
-          # Also ensure other required directories exist with proper permissions
-          mkdir -p $HOME/pkg
-          chmod 755 $HOME/pkg
-          
-          echo "Cache directory: $HOME/.cache/omnibus"
-          echo "Package output directory: $HOME/pkg"
-          
-          # Create temporary omnibus config with explicit cache directory
+
+          echo "=== Install Omnibus gem and binstub ==="
+          gem install omnibus -v '9.0.19' --no-document
+          bundle binstubs omnibus --force
+          export PATH=$PWD/bin:$PATH
+
           TEMP_OMNIBUS_CONFIG="/tmp/omnibus_config.rb"
           cat > "$TEMP_OMNIBUS_CONFIG" << EOF
-          cache_dir '$HOME/.cache/omnibus'
+          cache_dir '$HOME/.cache/omnibus' 
           use_s3_caching false
           fetcher_progress_bar false
           build_retries 2
           fetcher_retries 5
           append_timestamp false
           EOF
-          
-          echo "Created temporary omnibus config: $TEMP_OMNIBUS_CONFIG"
-          echo "Config contents:"
-          cat "$TEMP_OMNIBUS_CONFIG"
-          
-          # Build with verbose logging and explicit config file
-          bundle exec omnibus --config-file "$TEMP_OMNIBUS_CONFIG" build gitlab \
-            --log-level "${{ env.BUILD_LOG_LEVEL }}"
+
+          echo "=== Start Omnibus build ==="
+          bin/omnibus --config-file "$TEMP_OMNIBUS_CONFIG" build gitlab --log-level "$BUILD_LOG_LEVEL"
+
         env:
           ee: "true"
           COMPRESS_XZ: "true"
@@ -243,39 +136,18 @@ jobs:
       - name: Package verification and listing
         run: |
           echo "=== Build Summary ==="
-          echo "Generated packages in pkg/ directory:"
           ls -la pkg/ 2>/dev/null || echo "No packages directory found"
-          
-          echo -e "\n=== DEB Packages ==="
+
           DEB_COUNT=$(find pkg/ -name "*.deb" -type f 2>/dev/null | wc -l)
-          if [ "$DEB_COUNT" -gt 0 ]; then
-            find pkg/ -name "*.deb" -type f -exec ls -lh {} \;
-            echo "Total DEB packages: $DEB_COUNT"
-          else
-            echo "No DEB packages generated"
-          fi
-          
-          echo -e "\n=== RPM Packages ==="
           RPM_COUNT=$(find pkg/ -name "*.rpm" -type f 2>/dev/null | wc -l)
-          if [ "$RPM_COUNT" -gt 0 ]; then
-            find pkg/ -name "*.rpm" -type f -exec ls -lh {} \;
-            echo "Total RPM packages: $RPM_COUNT"
-          else
-            echo "No RPM packages generated"
-          fi
-          
+          echo "DEB packages: $DEB_COUNT, RPM packages: $RPM_COUNT"
           TOTAL_PACKAGES=$((DEB_COUNT + RPM_COUNT))
-          echo -e "\n=== Final Summary ==="
-          echo "OS: ${{ matrix.os }}"
-          echo "Total packages generated: $TOTAL_PACKAGES"
-          if [ "$TOTAL_PACKAGES" -eq 0 ]; then
-            echo "::warning::No packages were generated"
-          fi
+          echo "Total packages: $TOTAL_PACKAGES"
+          if [ "$TOTAL_PACKAGES" -eq 0 ]; then echo "::warning::No packages generated"; fi
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         if: always()
-        continue-on-error: true
         with:
           name: gitlab-ee-${{ matrix.os }}-${{ github.sha }}
           path: |
@@ -290,34 +162,13 @@ jobs:
       - name: Workflow completion notice
         if: always()
         run: |
-          echo "=== Workflow Status ==="
-          echo "✅ Build workflow completed successfully"
-          echo "📦 Artifacts have been uploaded"
-          echo "⚠️  Any permission errors shown below are from runner cleanup and can be ignored"
-          echo ""
-          echo "Build Summary:"
-          echo "- Target OS: ${{ matrix.os }}"
-          echo "- Git SHA: ${{ github.sha }}"
-          echo "- Build successful: ${{ job.status == 'success' && 'YES' || 'NO' }}"
-          
-          # Exit with success to prevent runner cleanup errors from failing the job
+          echo "✅ Build workflow completed"
           exit 0
 
       - name: Cleanup workspace
         if: always()
         run: |
-          echo "=== Cleanup ==="
-          # Remove user-owned temporary files to save space
-          rm -rf vendor/bundle/ruby/*/cache 2>/dev/null || true
-          rm -rf $HOME/.cache/omnibus/* 2>/dev/null || true
-          rm -rf tmp/ 2>/dev/null || true
-          
-          # Clean up user gem cache
-          if [ -d "$HOME/.gem" ]; then
-            find $HOME/.gem -name "*.gem" -delete 2>/dev/null || true
-          fi
-          
-          # Show final disk usage
-          echo "Final disk usage:"
-          du -sh . 2>/dev/null || echo "Unable to calculate disk usage"
-          df -h . 2>/dev/null || echo "Unable to show filesystem info"
+          rm -rf vendor/bundle/ruby/*/cache $HOME/.cache/omnibus tmp/ 2>/dev/null || true
+          find $HOME/.gem -name "*.gem" -delete 2>/dev/null || true
+          du -sh . || echo "Unable to calculate disk usage"
+          df -h . || echo "Unable to show filesystem info"
