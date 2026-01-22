@@ -123,22 +123,24 @@ jobs:
           echo "Current Ruby version: $CURRENT_RUBY (major.minor: $CURRENT_MAJOR_MINOR)"
           
           # Determine compatible bundler version based on Ruby version
+          # Use newer bundler versions that support force_ruby_platform: true from Gemfile
           case "$CURRENT_MAJOR_MINOR" in
             "3.0")
-              BUNDLER_VERSION="2.2.33"  # Compatible with Ruby 3.0
-              echo "Using bundler version $BUNDLER_VERSION for Ruby 3.0 compatibility"
+              # Ruby 3.0 needs a newer bundler that supports force_ruby_platform
+              BUNDLER_VERSION="2.4.22"  # Supports force_ruby_platform and is compatible with Ruby 3.0
+              echo "Using bundler version $BUNDLER_VERSION for Ruby 3.0 compatibility with force_ruby_platform support"
               ;;
             "3.1")
-              BUNDLER_VERSION="2.3.26"  # Compatible with Ruby 3.1
-              echo "Using bundler version $BUNDLER_VERSION for Ruby 3.1 compatibility"
+              BUNDLER_VERSION="2.4.22"  # Safe version that supports force_ruby_platform
+              echo "Using bundler version $BUNDLER_VERSION for Ruby 3.1 compatibility with force_ruby_platform support"
               ;;
             "3.2")
               BUNDLER_VERSION="2.7.1"   # Latest version for Ruby 3.2+
               echo "Using bundler version $BUNDLER_VERSION for Ruby 3.2+ compatibility"
               ;;
             *)
-              BUNDLER_VERSION="2.2.33"  # Safe fallback
-              echo "Using fallback bundler version $BUNDLER_VERSION"
+              BUNDLER_VERSION="2.4.22"  # Safe fallback that supports force_ruby_platform
+              echo "Using fallback bundler version $BUNDLER_VERSION with force_ruby_platform support"
               ;;
           esac
           
@@ -213,10 +215,10 @@ jobs:
           CURRENT_RUBY=$(ruby -v | cut -d' ' -f2 | cut -d'p' -f1)
           CURRENT_MAJOR_MINOR=$(echo "$CURRENT_RUBY" | cut -d'.' -f1,2)
           case "$CURRENT_MAJOR_MINOR" in
-            "3.0") BUNDLER_VERSION="2.2.33" ;;
-            "3.1") BUNDLER_VERSION="2.3.26" ;;
+            "3.0") BUNDLER_VERSION="2.4.22" ;;
+            "3.1") BUNDLER_VERSION="2.4.22" ;;
             "3.2") BUNDLER_VERSION="2.7.1" ;;
-            *) BUNDLER_VERSION="2.2.33" ;;
+            *) BUNDLER_VERSION="2.4.22" ;;
           esac
           export BUNDLER_VERSION
           echo "Using BUNDLER_VERSION: $BUNDLER_VERSION"
@@ -270,10 +272,10 @@ jobs:
           CURRENT_RUBY=$(ruby -v | cut -d' ' -f2 | cut -d'p' -f1)
           CURRENT_MAJOR_MINOR=$(echo "$CURRENT_RUBY" | cut -d'.' -f1,2)
           case "$CURRENT_MAJOR_MINOR" in
-            "3.0") BUNDLER_VERSION="2.2.33" ;;
-            "3.1") BUNDLER_VERSION="2.3.26" ;;
+            "3.0") BUNDLER_VERSION="2.4.22" ;;
+            "3.1") BUNDLER_VERSION="2.4.22" ;;
             "3.2") BUNDLER_VERSION="2.7.1" ;;
-            *) BUNDLER_VERSION="2.2.33" ;;
+            *) BUNDLER_VERSION="2.4.22" ;;
           esac
           export BUNDLER_VERSION
           echo "Using BUNDLER_VERSION: $BUNDLER_VERSION"
@@ -337,10 +339,10 @@ jobs:
           CURRENT_RUBY=$(ruby -v | cut -d' ' -f2 | cut -d'p' -f1)
           CURRENT_MAJOR_MINOR=$(echo "$CURRENT_RUBY" | cut -d'.' -f1,2)
           case "$CURRENT_MAJOR_MINOR" in
-            "3.0") BUNDLER_VERSION="2.2.33" ;;
-            "3.1") BUNDLER_VERSION="2.3.26" ;;
+            "3.0") BUNDLER_VERSION="2.4.22" ;;
+            "3.1") BUNDLER_VERSION="2.4.22" ;;
             "3.2") BUNDLER_VERSION="2.7.1" ;;
-            *) BUNDLER_VERSION="2.2.33" ;;
+            *) BUNDLER_VERSION="2.4.22" ;;
           esac
           export BUNDLER_VERSION
           echo "Using BUNDLER_VERSION: $BUNDLER_VERSION"
