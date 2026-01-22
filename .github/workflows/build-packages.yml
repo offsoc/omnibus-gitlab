@@ -117,44 +117,31 @@ jobs:
             echo "⚠ No newer Ruby versions available, using system Ruby 3.0"
           fi
           
-          # Get required bundler version from Gemfile.lock
-          REQUIRED_BUNDLER="$(grep -A 1 "BUNDLED WITH" Gemfile.lock | tail -1 | tr -d '[:space:]')"
-          echo "Required Bundler version from Gemfile.lock: $REQUIRED_BUNDLER"
+          # Set the same bundler version as defined in GitLab CI variables
+          export BUNDLER_VERSION="2.7.1"
+          echo "Setting BUNDLER_VERSION to $BUNDLER_VERSION (from GitLab CI config)"
           
           # Get current Ruby version after potential switch
           CURRENT_RUBY=$(ruby -v | cut -d' ' -f2 | cut -d'p' -f1)
           CURRENT_MAJOR_MINOR=$(echo "$CURRENT_RUBY" | cut -d'.' -f1,2)
           echo "Current Ruby version: $CURRENT_RUBY (major.minor: $CURRENT_MAJOR_MINOR)"
           
-          # Install bundler with appropriate version compatibility
-          echo "Installing bundler..."
+          # Create user gem directory if it doesn't exist
+          mkdir -p $HOME/.gem/ruby
           
-          # Try the exact version first
-          if sudo gem install bundler -v "$REQUIRED_BUNDLER" --no-document --force 2>/dev/null; then
-            echo "✓ Successfully installed bundler $REQUIRED_BUNDLER"
-          else
-            echo "⚠ Could not install exact version $REQUIRED_BUNDLER, installing compatible version..."
-            
-            case "$CURRENT_MAJOR_MINOR" in
-              "3.0")
-                echo "Installing bundler compatible with Ruby 3.0"
-                sudo gem install bundler -v "~> 2.2.0" --no-document --force
-                ;;
-              "3.1")
-                echo "Installing bundler compatible with Ruby 3.1"
-                sudo gem install bundler -v "~> 2.3.0" --no-document --force
-                ;;
-              *)
-                echo "Installing latest compatible bundler for Ruby $CURRENT_MAJOR_MINOR"
-                sudo gem install bundler --no-document --force
-                ;;
-            esac
-          fi
+          # Install bundler to user directory using the approach from GitLab CI prepare_bundle.sh
+          echo "Installing bundler version $BUNDLER_VERSION to user directory..."
+          gem install bundler:$BUNDLER_VERSION --user-install --no-document --force
+          
+          # Add user gem bin directory to PATH
+          echo "$HOME/.gem/ruby/*/bin" >> $GITHUB_PATH
+          export PATH="$HOME/.gem/ruby/*/bin:$PATH"
           
           # Verify installation
           if command -v bundle >/dev/null 2>&1; then
             INSTALLED_BUNDLER=$(bundle --version 2>/dev/null | head -1)
             echo "✓ Bundler successfully installed: $INSTALLED_BUNDLER"
+            gem list bundler --local
           else
             echo "❌ Bundler installation failed"
             echo "Available Ruby: $(ruby -v)"
@@ -167,22 +154,52 @@ jobs:
           echo "Ruby: $(ruby -v)"
           echo "Bundler: $(bundle --version 2>/dev/null | head -1)"
           echo "Bundler gems: $(gem list bundler --local)"
+          echo "Bundle executable path: $(which bundle)"
 
       - name: Install Ruby gems
         run: |
-          # Configure bundle for optimal performance
+          echo "=== Installing Ruby Gems ==="
+          
+          # Export BUNDLER_VERSION to ensure consistency
+          export BUNDLER_VERSION="2.7.1"
+          
+          # Ensure user gem bin directory is in PATH
+          export PATH="$HOME/.gem/ruby/*/bin:$PATH"
+          
+          # Configure bundle following GitLab CI approach from prepare_bundle.sh
+          bundle config build.ffi --disable-system-libffi
           bundle config set --local path 'vendor/bundle'
-          bundle config set --local bin 'vendor/bundle/bin'
+          bundle config set --local without 'rubocop'
+          bundle config set --local frozen 'true'
           bundle config set --local jobs '${{ env.BUNDLE_JOBS }}'
           bundle config set --local retry '${{ env.BUNDLE_RETRY }}'
           bundle config set --local without 'development test rubocop'
-          # Install gems
-          bundle install
+          
+          # Clear any existing bundle cache to avoid conflicts
+          bundle config unset cache_path 2>/dev/null || true
+          rm -rf vendor/bundle 2>/dev/null || true
+          
+          # Install gems with the same approach as GitLab CI
+          echo "Installing gems with bundler..."
+          bundle install -j $(nproc)
+          
+          # Create binstubs
           bundle binstubs --all
+          
+          echo "✓ Gem installation completed successfully"
 
       - name: Validate build requirements
         run: |
           echo "=== Build Validation ==="
+          
+          # Debug bundler environment
+          echo "Bundler environment check:"
+          echo "Bundle version: $(bundle --version 2>/dev/null || echo 'NOT FOUND')"
+          echo "Bundle executable: $(which bundle 2>/dev/null || echo 'NOT FOUND')"
+          echo "Gem environment:"
+          gem env 2>/dev/null || echo "Gem environment not available"
+          echo ""
+          
           # Check required patch file
           PATCH_FILE="config/patches/gitlab-rails/replace-license-key.patch"
           if [ ! -f "$PATCH_FILE" ]; then
@@ -217,6 +234,30 @@ jobs:
 
       - name: Build GitLab EE packages
         run: |
+          # Echo pipeline type like in GitLab CI
+          echo "PIPELINE_TYPE detected as BRANCH_BUILD_PIPELINE"
+          
+          # Ensure user gem bin directory is in PATH
+          export PATH="$HOME/.gem/ruby/*/bin:$PATH"
+          
+          # Run the same before_script commands as in GitLab CI
+          echo $NIGHTLY
+          mkdir -p ~/.ssh
+          mkdir -p ~/.aws
+          mkdir -p cache
+          if [ -n "$DEV_GITLAB_SSH_KEY" ]; then
+            echo "$DEV_GITLAB_SSH_KEY" > ~/.ssh/id_rsa;
+            cp support/known_hosts ~/.ssh/known_hosts;
+            chmod -R 0600 ~/.ssh/;
+          fi
+          # Export BUNDLER_VERSION for prepare_bundle.sh script
+          export BUNDLER_VERSION="2.7.1"
+          bash scripts/ci/prepare_bundle.sh
+          if [ -n "$NIGHTLY" ]; then
+            export STAGING_REPO=${NIGHTLY_REPO};
+            export FIPS_STAGING_REPO=${NIGHTLY_FIPS_REPO};
+          fi
+          
           # Ensure cache directory exists with proper permissions
           mkdir -p $HOME/.cache/omnibus
           chmod 755 $HOME/.cache/omnibus
@@ -228,6 +269,7 @@ jobs:
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
           OMNIBUS_CACHE_DIR: $HOME/.cache/omnibus
           PKG_DIR: $HOME/pkg
+          NIGHTLY: ""
 
       - name: Package verification and listing
         run: |
