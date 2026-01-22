@@ -114,7 +114,36 @@ jobs:
             sudo update-alternatives --set gem /usr/bin/gem3.1
             echo "Switched to Ruby: $(ruby -v)"
           else
-            echo "⚠ No newer Ruby versions available, using system Ruby 3.0"
+            echo "⚠ No newer Ruby versions available via update-alternatives, attempting to install Ruby 3.2.8 with rbenv..."
+            
+            # Install rbenv if not present
+            if [ ! -d "$HOME/.rbenv" ]; then
+              echo "Installing rbenv..."
+              git clone https://github.com/rbenv/rbenv.git $HOME/.rbenv
+              
+              # Install ruby-build plugin
+              git clone https://github.com/rbenv/ruby-build.git $HOME/.rbenv/plugins/ruby-build
+              
+              # Add rbenv to PATH
+              export PATH="$HOME/.rbenv/bin:$PATH"
+            else
+              export PATH="$HOME/.rbenv/bin:$PATH"
+            fi
+            
+            # Reinitialize rbenv
+            eval "$(rbenv init -)"
+            
+            # Install Ruby 3.2.8 if not already installed
+            if ! rbenv versions --bare | grep -q "^3\.2\.8$"; then
+              echo "Installing Ruby 3.2.8..."
+              rbenv install 3.2.8
+            fi
+            
+            # Set Ruby 3.2.8 as the global version
+            rbenv global 3.2.8
+            eval "$(rbenv init -)"
+            
+            echo "Set Ruby version to: $(ruby -v)"
           fi
           
           # Get current Ruby version after potential switch
@@ -139,7 +168,7 @@ jobs:
               echo "Using bundler version $BUNDLER_VERSION for Ruby 3.2+ compatibility"
               ;;
             *)
-              BUNDLER_VERSION="2.4.22"  # Safe fallback that supports force_ruby_platform
+              BUNDLER_VERSION="2.7.1"  # Latest version that supports force_ruby_platform
               echo "Using fallback bundler version $BUNDLER_VERSION with force_ruby_platform support"
               ;;
           esac
