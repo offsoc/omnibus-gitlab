@@ -117,14 +117,33 @@ jobs:
             echo "⚠ No newer Ruby versions available, using system Ruby 3.0"
           fi
           
-          # Set the same bundler version as defined in GitLab CI variables
-          export BUNDLER_VERSION="2.7.1"
-          echo "Setting BUNDLER_VERSION to $BUNDLER_VERSION (from GitLab CI config)"
-          
           # Get current Ruby version after potential switch
           CURRENT_RUBY=$(ruby -v | cut -d' ' -f2 | cut -d'p' -f1)
           CURRENT_MAJOR_MINOR=$(echo "$CURRENT_RUBY" | cut -d'.' -f1,2)
           echo "Current Ruby version: $CURRENT_RUBY (major.minor: $CURRENT_MAJOR_MINOR)"
+          
+          # Determine compatible bundler version based on Ruby version
+          case "$CURRENT_MAJOR_MINOR" in
+            "3.0")
+              BUNDLER_VERSION="2.2.33"  # Compatible with Ruby 3.0
+              echo "Using bundler version $BUNDLER_VERSION for Ruby 3.0 compatibility"
+              ;;
+            "3.1")
+              BUNDLER_VERSION="2.3.26"  # Compatible with Ruby 3.1
+              echo "Using bundler version $BUNDLER_VERSION for Ruby 3.1 compatibility"
+              ;;
+            "3.2")
+              BUNDLER_VERSION="2.7.1"   # Latest version for Ruby 3.2+
+              echo "Using bundler version $BUNDLER_VERSION for Ruby 3.2+ compatibility"
+              ;;
+            *)
+              BUNDLER_VERSION="2.2.33"  # Safe fallback
+              echo "Using fallback bundler version $BUNDLER_VERSION"
+              ;;
+          esac
+          
+          export BUNDLER_VERSION
+          echo "Final BUNDLER_VERSION: $BUNDLER_VERSION"
           
           # Create user gem directory if it doesn't exist
           mkdir -p $HOME/.gem/ruby
@@ -133,21 +152,32 @@ jobs:
           echo "Installing bundler version $BUNDLER_VERSION to user directory..."
           gem install bundler:$BUNDLER_VERSION --user-install --no-document --force
           
-          # Find the exact user gem bin directory and add to PATH
-          USER_GEM_BIN=$(find $HOME/.gem -name "bin" -type d 2>/dev/null | head -1)
-          if [ -n "$USER_GEM_BIN" ]; then
-            echo "Found user gem bin directory: $USER_GEM_BIN"
-            export PATH="$USER_GEM_BIN:$PATH"
-            echo "$USER_GEM_BIN" >> $GITHUB_PATH
+          # Find the correct user gem bin directory - prioritize the main bin directory
+          USER_GEM_BIN=""
+          
+          # First try to find the main user bin directory (not template directories)
+          RUBY_VERSION=$(ruby -v | cut -d' ' -f2 | cut -d'.' -f1,2)
+          MAIN_USER_BIN="$HOME/.gem/ruby/$RUBY_VERSION.0/bin"
+          
+          if [ -d "$MAIN_USER_BIN" ] && [ -f "$MAIN_USER_BIN/bundle" ]; then
+            USER_GEM_BIN="$MAIN_USER_BIN"
+            echo "Found main user gem bin directory: $USER_GEM_BIN"
           else
-            # Fallback to default user gem path
-            RUBY_VERSION=$(ruby -v | cut -d' ' -f2 | cut -d'.' -f1,2)
-            DEFAULT_USER_BIN="$HOME/.gem/ruby/$RUBY_VERSION.0/bin"
-            echo "Using default user gem bin directory: $DEFAULT_USER_BIN"
-            mkdir -p "$DEFAULT_USER_BIN"
-            export PATH="$DEFAULT_USER_BIN:$PATH"
-            echo "$DEFAULT_USER_BIN" >> $GITHUB_PATH
+            # Fallback: search for bin directories but exclude template directories
+            USER_GEM_BIN=$(find $HOME/.gem -path "*/bin" -type d -not -path "*/templates/*" -not -path "*/template/*" 2>/dev/null | head -1)
+            if [ -n "$USER_GEM_BIN" ] && [ -f "$USER_GEM_BIN/bundle" ]; then
+              echo "Found user gem bin directory (fallback search): $USER_GEM_BIN"
+            else
+              # Last resort: use the main bin directory even if it doesn't exist yet
+              USER_GEM_BIN="$MAIN_USER_BIN"
+              echo "Using default user gem bin directory: $USER_GEM_BIN"
+              mkdir -p "$USER_GEM_BIN"
+            fi
           fi
+          
+          # Add to PATH
+          export PATH="$USER_GEM_BIN:$PATH"
+          echo "$USER_GEM_BIN" >> $GITHUB_PATH
           
           # Verify installation in the same session
           if command -v bundle >/dev/null 2>&1; then
@@ -158,7 +188,10 @@ jobs:
             echo "❌ Bundler installation failed - bundle command not found"
             echo "PATH: $PATH"
             echo "Looking for bundle in:"
-            find $HOME/.gem -name "bundle" 2>/dev/null || echo "Bundle executable not found"
+            echo "Main user bin: $MAIN_USER_BIN"
+            echo "Selected user bin: $USER_GEM_BIN"
+            ls -la "$MAIN_USER_BIN" 2>/dev/null || echo "Main user bin directory not found or empty"
+            find $HOME/.gem -name "bundle" -type f 2>/dev/null || echo "Bundle executable not found"
             echo "Available Ruby: $(ruby -v)"
             echo "Available bundler gems:"
             gem list bundler --local
@@ -176,24 +209,34 @@ jobs:
         run: |
           echo "=== Installing Ruby Gems ==="
           
-          # Export BUNDLER_VERSION to ensure consistency
-          export BUNDLER_VERSION="2.7.1"
+          # Recalculate BUNDLER_VERSION for consistency (same logic as setup step)
+          CURRENT_RUBY=$(ruby -v | cut -d' ' -f2 | cut -d'p' -f1)
+          CURRENT_MAJOR_MINOR=$(echo "$CURRENT_RUBY" | cut -d'.' -f1,2)
+          case "$CURRENT_MAJOR_MINOR" in
+            "3.0") BUNDLER_VERSION="2.2.33" ;;
+            "3.1") BUNDLER_VERSION="2.3.26" ;;
+            "3.2") BUNDLER_VERSION="2.7.1" ;;
+            *) BUNDLER_VERSION="2.2.33" ;;
+          esac
+          export BUNDLER_VERSION
+          echo "Using BUNDLER_VERSION: $BUNDLER_VERSION"
           
-          # Ensure user gem bin directory is in PATH (using the same approach as setup)
-          USER_GEM_BIN=$(find $HOME/.gem -name "bin" -type d 2>/dev/null | head -1)
-          if [ -n "$USER_GEM_BIN" ]; then
-            export PATH="$USER_GEM_BIN:$PATH"
-          else
-            RUBY_VERSION=$(ruby -v | cut -d' ' -f2 | cut -d'.' -f1,2)
-            DEFAULT_USER_BIN="$HOME/.gem/ruby/$RUBY_VERSION.0/bin"
-            export PATH="$DEFAULT_USER_BIN:$PATH"
-          fi
+          # Use the same improved PATH logic as setup step
+          RUBY_VERSION=$(ruby -v | cut -d' ' -f2 | cut -d'.' -f1,2)
+          MAIN_USER_BIN="$HOME/.gem/ruby/$RUBY_VERSION.0/bin"
+          USER_GEM_BIN="$MAIN_USER_BIN"
+          
+          # Ensure the directory exists and add to PATH
+          mkdir -p "$USER_GEM_BIN"
+          export PATH="$USER_GEM_BIN:$PATH"
           
           # Verify bundle is available
           if ! command -v bundle >/dev/null 2>&1; then
             echo "❌ Bundle command not found in PATH"
             echo "PATH: $PATH"
-            find $HOME/.gem -name "bundle" 2>/dev/null || echo "Bundle executable not found"
+            echo "Looking in: $USER_GEM_BIN"
+            ls -la "$USER_GEM_BIN" 2>/dev/null || echo "Bin directory not found or empty"
+            find $HOME/.gem -name "bundle" -type f 2>/dev/null || echo "Bundle executable not found"
             exit 1
           fi
           
@@ -223,15 +266,26 @@ jobs:
         run: |
           echo "=== Build Validation ==="
           
-          # Ensure user gem bin directory is in PATH
-          USER_GEM_BIN=$(find $HOME/.gem -name "bin" -type d 2>/dev/null | head -1)
-          if [ -n "$USER_GEM_BIN" ]; then
-            export PATH="$USER_GEM_BIN:$PATH"
-          else
-            RUBY_VERSION=$(ruby -v | cut -d' ' -f2 | cut -d'.' -f1,2)
-            DEFAULT_USER_BIN="$HOME/.gem/ruby/$RUBY_VERSION.0/bin"
-            export PATH="$DEFAULT_USER_BIN:$PATH"
-          fi
+          # Recalculate BUNDLER_VERSION for consistency
+          CURRENT_RUBY=$(ruby -v | cut -d' ' -f2 | cut -d'p' -f1)
+          CURRENT_MAJOR_MINOR=$(echo "$CURRENT_RUBY" | cut -d'.' -f1,2)
+          case "$CURRENT_MAJOR_MINOR" in
+            "3.0") BUNDLER_VERSION="2.2.33" ;;
+            "3.1") BUNDLER_VERSION="2.3.26" ;;
+            "3.2") BUNDLER_VERSION="2.7.1" ;;
+            *) BUNDLER_VERSION="2.2.33" ;;
+          esac
+          export BUNDLER_VERSION
+          echo "Using BUNDLER_VERSION: $BUNDLER_VERSION"
+          
+          # Use the same improved PATH logic as setup step
+          RUBY_VERSION=$(ruby -v | cut -d' ' -f2 | cut -d'.' -f1,2)
+          MAIN_USER_BIN="$HOME/.gem/ruby/$RUBY_VERSION.0/bin"
+          USER_GEM_BIN="$MAIN_USER_BIN"
+          
+          # Ensure the directory exists and add to PATH
+          mkdir -p "$USER_GEM_BIN"
+          export PATH="$USER_GEM_BIN:$PATH"
           
           # Debug bundler environment
           echo "Bundler environment check:"
@@ -279,21 +333,34 @@ jobs:
           # Echo pipeline type like in GitLab CI
           echo "PIPELINE_TYPE detected as BRANCH_BUILD_PIPELINE"
           
-          # Ensure user gem bin directory is in PATH (using the same approach as setup)
-          USER_GEM_BIN=$(find $HOME/.gem -name "bin" -type d 2>/dev/null | head -1)
-          if [ -n "$USER_GEM_BIN" ]; then
-            export PATH="$USER_GEM_BIN:$PATH"
-          else
-            RUBY_VERSION=$(ruby -v | cut -d' ' -f2 | cut -d'.' -f1,2)
-            DEFAULT_USER_BIN="$HOME/.gem/ruby/$RUBY_VERSION.0/bin"
-            export PATH="$DEFAULT_USER_BIN:$PATH"
-          fi
+          # Recalculate BUNDLER_VERSION for consistency (same logic as setup step)
+          CURRENT_RUBY=$(ruby -v | cut -d' ' -f2 | cut -d'p' -f1)
+          CURRENT_MAJOR_MINOR=$(echo "$CURRENT_RUBY" | cut -d'.' -f1,2)
+          case "$CURRENT_MAJOR_MINOR" in
+            "3.0") BUNDLER_VERSION="2.2.33" ;;
+            "3.1") BUNDLER_VERSION="2.3.26" ;;
+            "3.2") BUNDLER_VERSION="2.7.1" ;;
+            *) BUNDLER_VERSION="2.2.33" ;;
+          esac
+          export BUNDLER_VERSION
+          echo "Using BUNDLER_VERSION: $BUNDLER_VERSION"
+          
+          # Use the same improved PATH logic as setup step
+          RUBY_VERSION=$(ruby -v | cut -d' ' -f2 | cut -d'.' -f1,2)
+          MAIN_USER_BIN="$HOME/.gem/ruby/$RUBY_VERSION.0/bin"
+          USER_GEM_BIN="$MAIN_USER_BIN"
+          
+          # Ensure the directory exists and add to PATH
+          mkdir -p "$USER_GEM_BIN"
+          export PATH="$USER_GEM_BIN:$PATH"
           
           # Verify bundle is available
           if ! command -v bundle >/dev/null 2>&1; then
             echo "❌ Bundle command not found in PATH"
             echo "PATH: $PATH"
-            find $HOME/.gem -name "bundle" 2>/dev/null || echo "Bundle executable not found"
+            echo "Looking in: $USER_GEM_BIN"
+            ls -la "$USER_GEM_BIN" 2>/dev/null || echo "Bin directory not found or empty"
+            find $HOME/.gem -name "bundle" -type f 2>/dev/null || echo "Bundle executable not found"
             exit 1
           fi
           
@@ -307,8 +374,6 @@ jobs:
             cp support/known_hosts ~/.ssh/known_hosts;
             chmod -R 0600 ~/.ssh/;
           fi
-          # Export BUNDLER_VERSION for prepare_bundle.sh script
-          export BUNDLER_VERSION="2.7.1"
           bash scripts/ci/prepare_bundle.sh
           if [ -n "$NIGHTLY" ]; then
             export STAGING_REPO=${NIGHTLY_REPO};
