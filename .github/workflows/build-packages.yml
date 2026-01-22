@@ -252,6 +252,9 @@ jobs:
           export BUNDLER_VERSION
           echo "Using BUNDLER_VERSION: $BUNDLER_VERSION"
           
+          # Export BUNDLER_VERSION for prepare_bundle.sh
+          echo "BUNDLER_VERSION=$BUNDLER_VERSION" >> $GITHUB_ENV
+          
           # Use the same improved PATH logic as setup step
           RUBY_VERSION=$(ruby -v | cut -d' ' -f2 | cut -d'.' -f1,2)
           MAIN_USER_BIN="$HOME/.gem/ruby/$RUBY_VERSION.0/bin"
@@ -271,22 +274,10 @@ jobs:
             exit 1
           fi
           
-          # Configure bundle following GitLab CI approach from prepare_bundle.sh
-          bundle config build.ffi --disable-system-libffi
-          bundle config set --local path 'vendor/bundle'
-          bundle config set --local without 'rubocop'
-          bundle config set --local frozen 'true'
-          bundle config set --local jobs '${{ env.BUNDLE_JOBS }}'
-          bundle config set --local retry '${{ env.BUNDLE_RETRY }}'
-          bundle config set --local without 'development test rubocop'
-          
-          # Clear any existing bundle cache to avoid conflicts
-          bundle config unset cache_path 2>/dev/null || true
-          rm -rf vendor/bundle 2>/dev/null || true
-          
-          # Install gems with the same approach as GitLab CI
-          echo "Installing gems with bundler..."
-          bundle install -j $(nproc)
+          # Let prepare_bundle.sh handle bundle configuration and installation
+          # This ensures Git dependencies are properly checked out before bundle install
+          echo "Installing gems with bundler via prepare_bundle.sh..."
+          bash scripts/ci/prepare_bundle.sh
           
           # Create binstubs
           bundle binstubs --all
@@ -445,9 +436,8 @@ jobs:
           cat "$TEMP_OMNIBUS_CONFIG"
           
           # Build with verbose logging and explicit config file
-          bundle exec omnibus \
+          bundle exec omnibus build gitlab \
             --config-file "$TEMP_OMNIBUS_CONFIG" \
-            build gitlab \
             --log-level "${{ env.BUILD_LOG_LEVEL }}"
         env:
           ee: "true"
