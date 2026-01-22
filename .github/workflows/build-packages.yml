@@ -133,17 +133,32 @@ jobs:
           echo "Installing bundler version $BUNDLER_VERSION to user directory..."
           gem install bundler:$BUNDLER_VERSION --user-install --no-document --force
           
-          # Add user gem bin directory to PATH
-          echo "$HOME/.gem/ruby/*/bin" >> $GITHUB_PATH
-          export PATH="$HOME/.gem/ruby/*/bin:$PATH"
+          # Find the exact user gem bin directory and add to PATH
+          USER_GEM_BIN=$(find $HOME/.gem -name "bin" -type d 2>/dev/null | head -1)
+          if [ -n "$USER_GEM_BIN" ]; then
+            echo "Found user gem bin directory: $USER_GEM_BIN"
+            export PATH="$USER_GEM_BIN:$PATH"
+            echo "$USER_GEM_BIN" >> $GITHUB_PATH
+          else
+            # Fallback to default user gem path
+            RUBY_VERSION=$(ruby -v | cut -d' ' -f2 | cut -d'.' -f1,2)
+            DEFAULT_USER_BIN="$HOME/.gem/ruby/$RUBY_VERSION.0/bin"
+            echo "Using default user gem bin directory: $DEFAULT_USER_BIN"
+            mkdir -p "$DEFAULT_USER_BIN"
+            export PATH="$DEFAULT_USER_BIN:$PATH"
+            echo "$DEFAULT_USER_BIN" >> $GITHUB_PATH
+          fi
           
-          # Verify installation
+          # Verify installation in the same session
           if command -v bundle >/dev/null 2>&1; then
             INSTALLED_BUNDLER=$(bundle --version 2>/dev/null | head -1)
             echo "✓ Bundler successfully installed: $INSTALLED_BUNDLER"
             gem list bundler --local
           else
-            echo "❌ Bundler installation failed"
+            echo "❌ Bundler installation failed - bundle command not found"
+            echo "PATH: $PATH"
+            echo "Looking for bundle in:"
+            find $HOME/.gem -name "bundle" 2>/dev/null || echo "Bundle executable not found"
             echo "Available Ruby: $(ruby -v)"
             echo "Available bundler gems:"
             gem list bundler --local
@@ -155,6 +170,7 @@ jobs:
           echo "Bundler: $(bundle --version 2>/dev/null | head -1)"
           echo "Bundler gems: $(gem list bundler --local)"
           echo "Bundle executable path: $(which bundle)"
+          echo "Current PATH: $PATH"
 
       - name: Install Ruby gems
         run: |
@@ -163,8 +179,23 @@ jobs:
           # Export BUNDLER_VERSION to ensure consistency
           export BUNDLER_VERSION="2.7.1"
           
-          # Ensure user gem bin directory is in PATH
-          export PATH="$HOME/.gem/ruby/*/bin:$PATH"
+          # Ensure user gem bin directory is in PATH (using the same approach as setup)
+          USER_GEM_BIN=$(find $HOME/.gem -name "bin" -type d 2>/dev/null | head -1)
+          if [ -n "$USER_GEM_BIN" ]; then
+            export PATH="$USER_GEM_BIN:$PATH"
+          else
+            RUBY_VERSION=$(ruby -v | cut -d' ' -f2 | cut -d'.' -f1,2)
+            DEFAULT_USER_BIN="$HOME/.gem/ruby/$RUBY_VERSION.0/bin"
+            export PATH="$DEFAULT_USER_BIN:$PATH"
+          fi
+          
+          # Verify bundle is available
+          if ! command -v bundle >/dev/null 2>&1; then
+            echo "❌ Bundle command not found in PATH"
+            echo "PATH: $PATH"
+            find $HOME/.gem -name "bundle" 2>/dev/null || echo "Bundle executable not found"
+            exit 1
+          fi
           
           # Configure bundle following GitLab CI approach from prepare_bundle.sh
           bundle config build.ffi --disable-system-libffi
@@ -192,12 +223,23 @@ jobs:
         run: |
           echo "=== Build Validation ==="
           
+          # Ensure user gem bin directory is in PATH
+          USER_GEM_BIN=$(find $HOME/.gem -name "bin" -type d 2>/dev/null | head -1)
+          if [ -n "$USER_GEM_BIN" ]; then
+            export PATH="$USER_GEM_BIN:$PATH"
+          else
+            RUBY_VERSION=$(ruby -v | cut -d' ' -f2 | cut -d'.' -f1,2)
+            DEFAULT_USER_BIN="$HOME/.gem/ruby/$RUBY_VERSION.0/bin"
+            export PATH="$DEFAULT_USER_BIN:$PATH"
+          fi
+          
           # Debug bundler environment
           echo "Bundler environment check:"
           echo "Bundle version: $(bundle --version 2>/dev/null || echo 'NOT FOUND')"
           echo "Bundle executable: $(which bundle 2>/dev/null || echo 'NOT FOUND')"
           echo "Gem environment:"
           gem env 2>/dev/null || echo "Gem environment not available"
+          echo "Current PATH: $PATH"
           echo ""
           
           # Check required patch file
@@ -237,8 +279,23 @@ jobs:
           # Echo pipeline type like in GitLab CI
           echo "PIPELINE_TYPE detected as BRANCH_BUILD_PIPELINE"
           
-          # Ensure user gem bin directory is in PATH
-          export PATH="$HOME/.gem/ruby/*/bin:$PATH"
+          # Ensure user gem bin directory is in PATH (using the same approach as setup)
+          USER_GEM_BIN=$(find $HOME/.gem -name "bin" -type d 2>/dev/null | head -1)
+          if [ -n "$USER_GEM_BIN" ]; then
+            export PATH="$USER_GEM_BIN:$PATH"
+          else
+            RUBY_VERSION=$(ruby -v | cut -d' ' -f2 | cut -d'.' -f1,2)
+            DEFAULT_USER_BIN="$HOME/.gem/ruby/$RUBY_VERSION.0/bin"
+            export PATH="$DEFAULT_USER_BIN:$PATH"
+          fi
+          
+          # Verify bundle is available
+          if ! command -v bundle >/dev/null 2>&1; then
+            echo "❌ Bundle command not found in PATH"
+            echo "PATH: $PATH"
+            find $HOME/.gem -name "bundle" 2>/dev/null || echo "Bundle executable not found"
+            exit 1
+          fi
           
           # Run the same before_script commands as in GitLab CI
           echo $NIGHTLY
