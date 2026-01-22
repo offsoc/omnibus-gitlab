@@ -358,6 +358,12 @@ jobs:
           if [ "$AVAILABLE_SPACE" -lt 10485760 ]; then  # Less than 10GB
             echo "::warning::Low disk space available: $(($AVAILABLE_SPACE / 1024 / 1024))MB"
           fi
+          
+          # Debug Omnibus installation
+          echo "\n=== Omnibus Debug Info ==="
+          echo "Omnibus version: $(bundle exec omnibus --version 2>/dev/null || echo 'NOT FOUND')"
+          echo "Omnibus executable: $(which omnibus 2>/dev/null || echo 'NOT FOUND')"
+          echo "Omnibus gem location: $(bundle show omnibus 2>/dev/null || echo 'NOT FOUND')"
 
       - name: Build GitLab EE packages
         run: |
@@ -439,7 +445,10 @@ jobs:
           cat "$TEMP_OMNIBUS_CONFIG"
           
           # Build with verbose logging and explicit config file
-          bundle exec omnibus --config-file "$TEMP_OMNIBUS_CONFIG" build gitlab --log-level ${{ env.BUILD_LOG_LEVEL }}
+          bundle exec omnibus \
+            --config-file "$TEMP_OMNIBUS_CONFIG" \
+            build gitlab \
+            --log-level "${{ env.BUILD_LOG_LEVEL }}"
         env:
           ee: "true"
           COMPRESS_XZ: "true"
