@@ -412,22 +412,34 @@ jobs:
           fi
           
           # Ensure cache directory exists with proper permissions
-          # Create user-owned cache directory and configure Omnibus to use it
+          # Create user-owned cache directory
           mkdir -p $HOME/.cache/omnibus
           chmod 755 $HOME/.cache/omnibus
-          
-          # Set OMNIBUS_CACHE_DIR to user directory to avoid permission issues
-          export OMNIBUS_CACHE_DIR="$HOME/.cache/omnibus"
           
           # Also ensure other required directories exist with proper permissions
           mkdir -p $HOME/pkg
           chmod 755 $HOME/pkg
           
-          echo "Using cache directory: $OMNIBUS_CACHE_DIR"
+          echo "Cache directory: $HOME/.cache/omnibus"
           echo "Package output directory: $HOME/pkg"
           
-          # Build with verbose logging
-          bundle exec omnibus build gitlab --log-level ${{ env.BUILD_LOG_LEVEL }}
+          # Create temporary omnibus config with explicit cache directory
+          TEMP_OMNIBUS_CONFIG="/tmp/omnibus_config.rb"
+          cat > "$TEMP_OMNIBUS_CONFIG" << EOF
+          cache_dir '$HOME/.cache/omnibus'
+          use_s3_caching false
+          fetcher_progress_bar false
+          build_retries 2
+          fetcher_retries 5
+          append_timestamp false
+          EOF
+          
+          echo "Created temporary omnibus config: $TEMP_OMNIBUS_CONFIG"
+          echo "Config contents:"
+          cat "$TEMP_OMNIBUS_CONFIG"
+          
+          # Build with verbose logging and explicit config file
+          bundle exec omnibus build gitlab --config-file "$TEMP_OMNIBUS_CONFIG" --log-level ${{ env.BUILD_LOG_LEVEL }}
         env:
           ee: "true"
           COMPRESS_XZ: "true"
