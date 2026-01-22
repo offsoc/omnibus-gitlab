@@ -38,52 +38,43 @@ jobs:
       BUNDLE_RETRY: "3"
       BUILD_LOG_LEVEL: ${{ inputs.debug && 'debug' || 'info' }}
       DEBUG: ${{ inputs.debug && 'true' || 'false' }}
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           persist-credentials: false
-          
+
       - name: System diagnostics
         run: |
           echo "=== System Information ==="
-          echo "Runner OS: $(uname -a)"
-          echo "Date: $(date)"
-          echo "Working directory: $(pwd)"
-          echo "User: $(whoami)"
-          echo "\n=== Disk Space ==="
+          uname -a
+          date
+          pwd
+          whoami
+          echo "=== Disk Space ==="
           df -h
-          echo "\n=== Memory ==="
+          echo "=== Memory ==="
           free -h
-          echo "\n=== CPU ==="
+          echo "=== CPU ==="
           lscpu | head -10
-          
           if [[ "${{ env.DEBUG }}" == "true" ]]; then
-            echo "\n=== Environment Variables ==="
+            echo "=== Environment Variables ==="
             env | sort
           fi
-
-      - name: Setup environment
-        run: |
-          mkdir -p $HOME/.cache/omnibus $HOME/pkg $HOME/.bundle
-          chmod 755 $HOME/.cache/omnibus
-          echo "OMNIBUS_CACHE_DIR=$HOME/.cache/omnibus" >> $GITHUB_ENV
-          echo "PKG_DIR=$HOME/pkg" >> $GITHUB_ENV
-          echo "PATH=$HOME/.gem/ruby/$(ruby -v | cut -d' ' -f2 | cut -d'.' -f1,2).0/bin:$PATH" >> $GITHUB_ENV
 
       - name: Set up Ruby
         uses: ruby/setup-ruby@v1
         with:
           ruby-version: 3.2.8
-          bundler-cache: true  # 自动缓存 bundle
+          bundler-cache: true
 
       - name: Install system dependencies
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            build-essential libssl-dev zlib1g-dev \
-            libffi-dev libreadline-dev libyaml-dev \
+            build-essential libssl-dev zlib1g-dev libffi-dev libreadline-dev libyaml-dev \
             libxml2-dev libxslt1-dev libpq-dev libsqlite3-dev libmysqlclient-dev \
             libcurl4-openssl-dev libicu-dev cmake pkg-config xz-utils curl git ca-certificates \
             rpm fakeroot
@@ -92,28 +83,21 @@ jobs:
 
       - name: Install Ruby gems
         run: |
-          echo "=== Installing Ruby Gems ==="
-          echo "BUNDLER_VERSION=2.7.1" >> $GITHUB_ENV
+          echo "=== Installing Ruby gems ==="
           bash scripts/ci/prepare_bundle.sh
-          bundle binstubs --all --force
-          
-      - name: Validate build requirements
+          bundle binstubs --all
+          echo "✓ Gems installed"
+
+      - name: Validate build environment
         run: |
-          echo "=== Build Validation ==="
-          echo "Bundle version: $(bundle --version || echo 'NOT FOUND')"
-          echo "Gem environment:"
-          gem env
-          
+          echo "Bundle version: $(bundle --version)"
+          echo "Ruby version: $(ruby -v)"
           PATCH_FILE="config/patches/gitlab-rails/replace-license-key.patch"
           if [ ! -f "$PATCH_FILE" ]; then
-            echo "::error::Critical patch file not found: $PATCH_FILE"
+            echo "::error::Patch file missing: $PATCH_FILE"
             exit 1
           fi
-          
-          echo "✓ Patch file verified: $PATCH_FILE"
-          if [[ "${{ env.ee }}" == "true" ]]; then
-            echo "✓ Building GitLab Enterprise Edition"
-          fi
+          echo "✓ Patch file exists"
 
       - name: Build GitLab EE packages
         run: |
@@ -124,7 +108,7 @@ jobs:
           TEMP_OMNIBUS_CONFIG="/tmp/omnibus_config.rb"
           cat > "$TEMP_OMNIBUS_CONFIG" << EOF
           cache_dir '$HOME/.cache/omnibus'
-          use_s3_caching false
+          use_s3_caching false 
           fetcher_progress_bar false
           build_retries 2
           fetcher_retries 5
@@ -132,7 +116,9 @@ jobs:
           EOF
 
           echo "=== Start Omnibus build ==="
-          bundle exec omnibus --config-file "$TEMP_OMNIBUS_CONFIG" build gitlab --log-level "$BUILD_LOG_LEVEL"
+          bundle exec omnibus build gitlab \
+            --config-file "$TEMP_OMNIBUS_CONFIG" \
+            --log-level "$BUILD_LOG_LEVEL"
         env:
           ee: "true"
           COMPRESS_XZ: "true"
@@ -140,17 +126,14 @@ jobs:
           PKG_DIR: $HOME/pkg
           NIGHTLY: ""
 
-      - name: Package verification and listing
+      - name: Package verification
         run: |
-          echo "=== Build Summary ==="
-          ls -la pkg/ 2>/dev/null || echo "No packages directory found"
-          echo "Total DEB packages: $(find pkg/ -name '*.deb' | wc -l)"
-          echo "Total RPM packages: $(find pkg/ -name '*.rpm' | wc -l)"
+          echo "Packages in pkg/:"
+          ls -lh pkg/ || echo "No packages found"
 
-      - name: Upload build artifacts
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         if: always()
-        continue-on-error: true
         with:
           name: gitlab-ee-${{ matrix.os }}-${{ github.sha }}
           path: |
@@ -165,16 +148,5 @@ jobs:
       - name: Workflow completion notice
         if: always()
         run: |
-          echo "=== Workflow Status ==="
-          echo "Build successful: ${{ job.status == 'success' && 'YES' || 'NO' }}"
+          echo "Build workflow completed"
           exit 0
-
-      - name: Cleanup workspace
-        if: always()
-        run: |
-          rm -rf vendor/bundle/ruby/*/cache 2>/dev/null || true
-          rm -rf $HOME/.cache/omnibus/* 2>/dev/null || true
-          rm -rf tmp/ 2>/dev/null || true
-          find $HOME/.gem -name "*.gem" -delete 2>/dev/null || true
-          du -sh . 2>/dev/null || echo "Unable to calculate disk usage"
-          df -h . 2>/dev/null || echo "Unable to show filesystem info"
