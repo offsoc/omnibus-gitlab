@@ -439,7 +439,7 @@ jobs:
           cat "$TEMP_OMNIBUS_CONFIG"
           
           # Build with verbose logging and explicit config file
-          bundle exec omnibus build gitlab --config-file "$TEMP_OMNIBUS_CONFIG" --log-level ${{ env.BUILD_LOG_LEVEL }}
+          bundle exec omnibus --config-file "$TEMP_OMNIBUS_CONFIG" build gitlab --log-level ${{ env.BUILD_LOG_LEVEL }}
         env:
           ee: "true"
           COMPRESS_XZ: "true"
