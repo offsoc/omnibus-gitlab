@@ -1,73 +1,92 @@
-name: GitLab EE Production Build (Official Sequence)
+name: GitLab EE Production Build
 
 on:
   push:
     branches: [ main, master ]
   workflow_dispatch:
 
-env:
-  EE: "true"
-  ee: "true"
-  COMPILE_ASSETS: "true"
-  SKIP_CHECK_NO_CHANGES: "true"
-  # 官方 Builder 镜像，内含所有 Rake 任务所需的工具链
-  BUILDER_IMAGE: "registry.gitlab.com/gitlab-org/gitlab-build-images/omnibus-gitlab-builder:ubuntu-22.04"
-
 jobs:
-  build:
+  build-packages:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+            builder_image: registry.gitlab.com/gitlab-org/gitlab-build-images/omnibus-gitlab-builder:ubuntu-22.04
+            pkg_ext: deb
+          - platform: centos-8
+            builder_image: registry.gitlab.com/gitlab-org/gitlab-build-images/omnibus-gitlab-builder:centos-8
+            pkg_ext: rpm
+      fail-fast: false
+
     container:
-      image: registry.gitlab.com/gitlab-org/gitlab-build-images/omnibus-gitlab-builder:ubuntu-22.04
+      image: ${{ matrix.builder_image }}
       options: --user root
 
+    # 修复：只保留一个大写的 EE，官方脚本同样能识别
+    env:
+      EE: "true"
+      COMPILE_ASSETS: "true"
+      SKIP_CHECK_NO_CHANGES: "true"
+      BUNDLE_JOBS: "4"
+      COMPILE_CONCURRENCY: "4"
+
     steps:
-      - name: 1. 检出源码
+      - name: 1. Checkout Code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: 2. 注入补丁并强制 EE 版本
+      - name: 2. Prepare Environment
         run: |
-          # 确保 VERSION 文件符合 EE 规范
-          [[ ! $(cat VERSION) == *"-ee"* ]] && echo "$(cat VERSION)-ee" > VERSION
+          # 确保版本后缀正确
+          if [[ ! $(cat VERSION) == *"-ee"* ]]; then
+            echo "$(cat VERSION)-ee" > VERSION
+          fi
           
-          # 动态注入自定义补丁到 Rails 软件定义
+          # 创建必要目录
+          mkdir -p /opt/gitlab /var/cache/omnibus
+          
+          # 安装依赖
+          bundle install --retry 3
+          bundle binstubs --all
+
+      - name: 3. Inject Custom Patches
+        run: |
           RAILS_DEF="config/software/gitlab-rails.rb"
           PATCH_NAME="replace-license-key.patch"
+          
           if [ -f "config/patches/gitlab-rails/$PATCH_NAME" ]; then
+            # 动态注册补丁到 Omnibus 软件定义
             sed -i "/patch source: '.*.patch'/a \  patch source: '$PATCH_NAME'" "$RAILS_DEF"
+            echo "✓ Patch registered."
           fi
 
-      - name: 3. 准备构建环境 (Bundler)
+      - name: 4. Execute Official Build Sequence
         run: |
-          mkdir -p /opt/gitlab /var/cache/omnibus ~/.ssh
-          bundle install --jobs 4 --retry 3
-
-      - name: 4. 执行官方构建序列 (Strict Official Sequence)
-        run: |
-          # 步骤 A: 处理缓存 (提高后续构建速度)
+          # 严格按照你提供的官方任务序列执行
           bundle exec rake cache:populate
           bundle exec rake cache:restore
           
-          # 步骤 B: 核心项目构建 (应用补丁并编译)
+          # 核心构建任务 (应用补丁并打包)
           bundle exec rake build:project
           
-          # 步骤 C: 生成组件版本清单 (生产审计必备)
+          # 生成组件版本清单
           bundle exec rake build:component_shas
           
-          # 步骤 D: 更新并打包新缓存
+          # 打包新缓存 (可选)
           bundle exec rake cache:bundle
 
-      - name: 5. 校验与上传产物
+      - name: 5. Verify Artifacts
         run: |
+          ls -lh pkg/
           cd pkg/
-          sha256sum *.deb > SHA256SUMS || true
-          sha256sum *.rpm >> SHA256SUMS || true
+          sha256sum *.${{ matrix.pkg_ext }} > SHA256SUMS
 
-      - name: 6. 归档到 GitHub Artifacts
+      - name: 6. Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: gitlab-ee-production-pkg
+          name: gitlab-ee-official-${{ matrix.platform }}
           path: |
             pkg/*.deb
             pkg/*.rpm
