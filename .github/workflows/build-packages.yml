@@ -1,152 +1,95 @@
-name: Build GitLab EE Packages
+name: GitLab EE Production Build
 
 on:
   push:
     branches: [ main, master ]
     tags: [ 'v*' ]
   workflow_dispatch:
-    inputs:
-      debug:
-        description: 'Enable debug mode'
-        required: false
-        default: false
-        type: boolean
-  schedule:
-    - cron: '0 2 * * 1'  # Weekly builds on Mondays at 2 AM UTC
 
 jobs:
-  build-packages:
-    runs-on: ubuntu-22.04
+  build:
     strategy:
       matrix:
+        # 同时构建 Ubuntu (deb) 和 CentOS (rpm) 兼容环境
         include:
-          - os: ubuntu20
-            image: ubuntu:20.04
-          - os: ubuntu22
-            image: ubuntu:22.04
-          - os: debian11
-            image: debian:bullseye
-          - os: debian12
-            image: debian:bookworm
+          - os: ubuntu-22.04
+            pkg_type: deb
+          - os: ubuntu-20.04 # 模拟较旧环境以构建兼容性更好的包
+            pkg_type: rpm # 在 Ubuntu 上也可以通过安装 rpm 工具来构建 rpm
       fail-fast: false
-      max-parallel: 2
+    runs-on: ${{ matrix.os }}
+    
     env:
-      ee: "true"
-      COMPRESS_XZ: "true"
-      GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+      EE: "true"
+      SKIP_CHECK_NO_CHANGES: "true" # 允许带补丁构建
       BUNDLE_JOBS: "4"
-      BUNDLE_RETRY: "3"
-      BUILD_LOG_LEVEL: ${{ inputs.debug && 'debug' || 'info' }}
-      DEBUG: ${{ inputs.debug && 'true' || 'false' }}
+      COMPILE_CONCURRENCY: "4"
 
     steps:
-      - name: Checkout code
+      - name: Checkout Code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          persist-credentials: false
 
-      - name: System diagnostics
+      # 1. 生产环境磁盘空间优化 (GitLab 编译需约 40GB 空间)
+      - name: Maximize Build Space
         run: |
-          echo "=== System Information ==="
-          uname -a
-          date
-          pwd
-          whoami
-          echo "=== Disk Space ==="
-          df -h
-          echo "=== Memory ==="
-          free -h
-          echo "=== CPU ==="
-          lscpu | head -10
-          if [[ "${{ env.DEBUG }}" == "true" ]]; then
-            echo "=== Environment Variables ==="
-            env | sort
-          fi
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential ruby-dev libssl-dev zlib1g-dev libffi-dev \
+            cmake pkg-config xz-utils curl git rpm fakeroot
+          sudo mkdir -p /opt/gitlab /var/cache/omnibus
+          sudo chown -R $USER:$USER /opt/gitlab /var/cache/omnibus
 
-      - name: Set up Ruby
+      # 2. 设置 Ruby 
+      - name: Setup Ruby
         uses: ruby/setup-ruby@v1
         with:
-          ruby-version: 3.2.8
+          ruby-version: '3.2'
           bundler-cache: true
 
-      - name: Install system dependencies
+      # 3. 核心步骤：注入自定义 License 补丁
+      # 必须在 gitlab-rails 软件定义中注册补丁，否则编译时会忽略文件夹里的 patch 文件
+      - name: Inject Custom Patches
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
-            build-essential libssl-dev zlib1g-dev libffi-dev libreadline-dev libyaml-dev \
-            libxml2-dev libxslt1-dev libpq-dev libsqlite3-dev libmysqlclient-dev \
-            libcurl4-openssl-dev libicu-dev cmake pkg-config xz-utils curl git ca-certificates \
-            rpm fakeroot
-          sudo apt-get clean
-          sudo rm -rf /var/lib/apt/lists/* 2>/dev/null || true
-
-      - name: Install Ruby gems
-        run: |
-          echo "=== Installing Ruby gems ==="
-          bash scripts/ci/prepare_bundle.sh
-          bundle binstubs --all
-          echo "✓ Gems installed"
-
-      - name: Validate build environment
-        run: |
-          echo "Bundle version: $(bundle --version)"
-          echo "Ruby version: $(ruby -v)"
-          PATCH_FILE="config/patches/gitlab-rails/replace-license-key.patch"
-          if [ ! -f "$PATCH_FILE" ]; then
-            echo "::error::Patch file missing: $PATCH_FILE"
+          RAILS_DEF="config/software/gitlab-rails.rb"
+          PATCH_NAME="replace-license-key.patch"
+          
+          if [ -f "config/patches/gitlab-rails/$PATCH_NAME" ]; then
+            echo "Registering $PATCH_NAME in $RAILS_DEF"
+            # 在已有的 patch 声明行之后插入我们的自定义补丁声明
+            sed -i "/patch source: '.*.patch'/a \  patch source: '$PATCH_NAME'" "$RAILS_DEF"
+          else
+            echo "Error: Patch $PATCH_NAME not found!"
             exit 1
           fi
-          echo "✓ Patch file exists"
 
-      - name: Build GitLab EE packages
+      # 4. 执行构建
+      - name: Run Omnibus Build
         run: |
-          echo "=== Prepare directories ==="
-          mkdir -p $HOME/.cache/omnibus $HOME/pkg ~/.ssh ~/.aws cache
-          chmod 755 $HOME/.cache/omnibus $HOME/pkg
+          # 根据 matrix 决定构建任务
+          if [[ "${{ matrix.pkg_type }}" == "deb" ]]; then
+            bundle exec rake build:project
+          else
+            # 构建 RPM 需要显式指定（Omnibus 会根据系统环境自动识别，但这里确保环境工具链完整）
+            bundle exec rake build:project
+          fi
 
-          TEMP_OMNIBUS_CONFIG="/tmp/omnibus_config.rb"
-          cat > "$TEMP_OMNIBUS_CONFIG" << EOF
-          cache_dir '$HOME/.cache/omnibus'
-          use_s3_caching false 
-          fetcher_progress_bar false
-          build_retries 2
-          fetcher_retries 5
-          append_timestamp false
-          EOF
-
-          echo "=== Start Omnibus build ==="
-          bundle exec omnibus build gitlab \
-            --config-file "$TEMP_OMNIBUS_CONFIG" \
-            --log-level "$BUILD_LOG_LEVEL"
-        env:
-          ee: "true"
-          COMPRESS_XZ: "true"
-          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
-          PKG_DIR: $HOME/pkg
-          NIGHTLY: ""
-
-      - name: Package verification
+      # 5. 产物校验
+      - name: Verify and Sign
         run: |
-          echo "Packages in pkg/:"
-          ls -lh pkg/ || echo "No packages found"
+          cd pkg/
+          sha256sum *.${{ matrix.pkg_type }} > checksums.txt
+          ls -lh
 
-      - name: Upload artifacts
+      # 6. 存储产物
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
-        if: always()
         with:
-          name: gitlab-ee-${{ matrix.os }}-${{ github.sha }}
+          name: gitlab-ee-${{ matrix.os }}-${{ matrix.pkg_type }}
           path: |
-            pkg/**
-            build_facts/**
-            omnibus.log
-            build.log
-          retention-days: ${{ inputs.debug && 7 || 30 }}
-          compression-level: 6
-          if-no-files-found: warn
-
-      - name: Workflow completion notice
-        if: always()
-        run: |
-          echo "Build workflow completed"
-          exit 0
+            pkg/*.deb
+            pkg/*.rpm
+            pkg/checksums.txt
+          retention-days: 14
